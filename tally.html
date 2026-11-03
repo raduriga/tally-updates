@@ -9,7 +9,7 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
 <title>Tally</title>
-<meta name="tally-version" content="202611031823">
+<meta name="tally-version" content="202611031909">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="Local-first budget tracker rebuilt from the Spendee data model: wallets, transfers, recurring, budgets, Revolut CSV and Apple Pay Shortcut capture.">
 <style>
@@ -208,15 +208,35 @@ function parseAmount(s){
   return neg ? -n : n;
 }
 function toCents(s){ const n = typeof s === "number" ? s : parseAmount(s); return n == null ? null : Math.round(n * 100); }
+// Prefixed dollars come before "$"; "kr" is left out because SEK, NOK and DKK all use it.
+const SYMBOLS = [["US$","USD"],["HK$","HKD"],["NZ$","NZD"],["R$","BRL"],["A$","AUD"],["C$","CAD"],["S$","SGD"],["€","EUR"],["£","GBP"],["$","USD"],
+  ["¥","JPY"],["₹","INR"],["₩","KRW"],["₺","TRY"],["₪","ILS"],["₱","PHP"],["฿","THB"],["kč","CZK"],["zł","PLN"],["lei","RON"],["ft","HUF"],["лв","BGN"],["chf","CHF"]];
 function currencyFromText(s, fallback){
   s = String(s || "");
   const m = s.match(/\b([A-Z]{3})\b/); if (m) return m[1];
-  if (s.includes("€")) return "EUR"; if (s.includes("£")) return "GBP"; if (s.includes("$")) return "USD";
-  if (/kč/i.test(s)) return "CZK"; if (/zł/i.test(s)) return "PLN"; if (/\blei\b/i.test(s)) return "RON";
+  const low = s.toLowerCase();
+  for (const [sym, code] of SYMBOLS) if (low.includes(sym.toLowerCase())) return code;
   return fallback;
 }
 function rate(db, cur){ return cur === db.base ? 1 : (db.rates[cur] || 1); } // 1 unit of cur = rate base units
 function convert(db, cents, from, to){ return from === to ? cents : Math.round(cents * rate(db, from) / rate(db, to)); }
+function hasRate(db, cur){ return cur === db.base || db.rates[cur] > 0; }
+// A foreign amount in the wallet's currency, converted at today's rate and kept as `original` (Spendee: customCurrencyValue).
+// shortcut: uses the latest rate, not the rate on the payment's date; fine for same-day captures, off by a little for old CSV rows.
+function inWalletCurrency(db, cents, cur, w){
+  if (!cur || !w || cur === w.currency) return { amount: cents };
+  const original = { amount: cents, currency: cur };
+  return hasRate(db, cur) && hasRate(db, w.currency) ? { amount: convert(db, cents, cur, w.currency), original }
+    : { amount: cents, original, unconverted: true };
+}
+// Frankfurter (ECB) feed for db.base: {base, date, rates: {CZK: 24.34, ...}} as units per 1 base. Currencies it lacks keep manual rates.
+function applyRates(db, feed){
+  if (!feed || feed.base !== db.base || !feed.rates || typeof feed.rates !== "object") return false;
+  const auto = [];
+  for (const [cur, perBase] of Object.entries(feed.rates)) if (/^[A-Z]{3}$/.test(cur) && perBase > 0){ db.rates[cur] = 1 / perBase; auto.push(cur); }
+  db.ratesDate = String(feed.date || "").slice(0, 10); db.autoRates = auto;
+  return auto.length > 0;
+}
 
 function wallet(db, id){ return db.wallets.find(w => w.id === id); }
 function category(db, id){ return db.categories.find(c => c.id === id) || { id, name: id, icon: "📦", type: "expense" }; }
@@ -434,7 +454,9 @@ function importRows(db, parsed, targetWalletId){
       if (created.has(wid) && r.balance != null && (!last || r.date >= last.date)) created.set(wid, r);
     }
     const category = r.category === "other" || r.category === "otherin" ? guessCategory(db, r.desc, r.cents).category : r.category;
-    addTx(db, { walletId: wid, amount: r.cents, category, date: r.date, note: r.desc, countInOverview: r.countInOverview, importKey: r.key, source: parsed.kind });
+    const fx = inWalletCurrency(db, r.cents, r.currency, wallet(db, wid));
+    addTx(db, { walletId: wid, amount: fx.amount, original: fx.original, unconverted: fx.unconverted, category, date: r.date, note: r.desc,
+      countInOverview: r.countInOverview, importKey: r.key, source: parsed.kind });
     seen.add(r.key); added++;
   }
   // Open each new wallet at the balance Revolut reports, so totals match the bank even for a partial statement.
@@ -464,10 +486,11 @@ function parseCaptureHash(hash){
     card: card.trim().slice(0, 60), category: catFromDesc(merchant, -1) };
 }
 
-// Wallet for a captured card payment: the one used for this card before, a wallet named after the card, then by currency.
+// Wallet for a captured card payment: the one used for this card before, a wallet named after the card (same currency
+// first: a CZK payment on a Revolut card still lands in "Revolut EUR"), then one in the payment's currency.
 function captureWallet(db, cap){
-  const card = cap.card.toLowerCase(), cur = w => !cap.currency || w.currency === cap.currency;
-  return db.cardMap[cap.card] || (db.wallets.find(w => card && w.name.toLowerCase().includes(card) && cur(w)) || db.wallets.find(cur) || db.wallets[0] || {}).id;
+  const card = cap.card.toLowerCase(), cur = w => !cap.currency || w.currency === cap.currency, named = w => card && w.name.toLowerCase().includes(card);
+  return db.cardMap[cap.card] || (db.wallets.find(w => named(w) && cur(w)) || db.wallets.find(named) || db.wallets.find(cur) || db.wallets[0] || {}).id;
 }
 // Payments queued by the iPhone app's "Log payment in Tally" action: [{id, amount, merchant, card, date}].
 // Returns ids safe to drop from the queue (stored, already stored, or unreadable); kept ones wait for a wallet.
@@ -483,8 +506,9 @@ function importQueued(db, items){
     if (!wid) continue;
     const g = guessCategory(db, cap.merchant, cap.cents);
     if (!g.sure) unsure++;
-    addTx(db, { walletId: wid, amount: cap.cents, category: g.category, date: /^\d{4}-\d{2}-\d{2}$/.test(it.date) ? it.date : today(),
-      note: cap.merchant, source: "applepay", importKey: key });
+    const fx = inWalletCurrency(db, cap.cents, cap.currency, wallet(db, wid));
+    addTx(db, { walletId: wid, amount: fx.amount, original: fx.original, unconverted: fx.unconverted, category: g.category,
+      date: /^\d{4}-\d{2}-\d{2}$/.test(it.date) ? it.date : today(), note: cap.merchant, source: "applepay", importKey: key });
     if (cap.card && !db.cardMap[cap.card]) db.cardMap[cap.card] = wid;
     seen.add(key); ack.push(it.id); added++;
   }
@@ -630,7 +654,8 @@ function txRow(t){
   let title = t.note || c.name;
   if (k === "transfer"){ const o = db.transactions.find(x => x.id === t.linkedId), ow = o && wallet(db, o.walletId);
     title = (t.amount < 0 ? "To " : "From ") + (ow ? ow.name : "wallet") + (t.note ? " · " + t.note : ""); }
-  const meta = [w ? w.name : "?", t.note ? c.name : "", ...(t.labels || []).map(l => "#" + l), t.templateId ? "🔁" : ""].filter(Boolean).join(" · ");
+  const orig = t.original ? fmt(t.original.amount, t.original.currency) + (t.unconverted ? " ⚠ no exchange rate, edit the amount" : "") : "";
+  const meta = [w ? w.name : "?", t.note ? c.name : "", orig, ...(t.labels || []).map(l => "#" + l), t.templateId ? "🔁" : ""].filter(Boolean).join(" · ");
   return '<button class="li" data-tx="' + t.id + '"><span class="ic">' + c.icon + '</span><span class="mid"><span class="ttl" style="display:block">' + esc(title) +
     '</span><span class="meta" style="display:block">' + esc(meta) + '</span></span><span class="amt ' + k + '">' + fmt(t.amount, w ? w.currency : db.base, true) + '</span></button>';
 }
@@ -757,7 +782,7 @@ function txSheet({ tx, kind, prefill = {} }){
         else addTransfer(db, wid, to, cents, date, note, c2);
       } else {
         const amount = k === "expense" ? -cents : cents, labels = $("#f-lab").value.split(",").map(s => s.trim()).filter(Boolean);
-        if (editing) Object.assign(tx, { amount, walletId: wid, category: cat, date, note, labels });
+        if (editing) Object.assign(tx, { amount, walletId: wid, category: cat, date, note, labels, unconverted: false }); // a hand-edited amount is final
         else if (rep) db.templates.push({ id: uid(), walletId: wid, amount, category: cat, note, labels, repeat: rep, next: date });
         else addTx(db, { walletId: wid, amount, category: cat, date, note, labels, source: prefill.source || "manual" });
         if (prefill.card) db.cardMap[prefill.card] = wid;
@@ -878,15 +903,30 @@ $("#m-recurring").onclick = function rec(){
     if (t) ask("Stop this recurring series? Past transactions stay.", "Stop series", () => { db.templates = db.templates.filter(x => x !== t); save(); render(); rec(); }); });
 };
 
-$("#m-rates").onclick = () => {
-  const curs = [...new Set(db.wallets.map(w => w.currency))].filter(c => c !== db.base);
-  openSheet('<h2>Currencies</h2><label class="fld">Main currency<input id="r-base" maxlength="3" value="' + db.base + '" style="text-transform:uppercase"></label>' +
-    (curs.length ? '<p class="mini">How much is 1 unit worth in ' + db.base + '? Used for totals and budgets.</p>' + curs.map(c => '<label class="fld">1 ' + c + ' = ? ' + db.base + '<input data-rate="' + c + '" inputmode="decimal" value="' + (db.rates[c] || "") + '" placeholder="1"></label>').join("")
-      : '<p class="mini">All wallets use ' + db.base + '.</p>') + '<div class="btns"><button class="btn ghost" id="i-cancel">Cancel</button><button class="btn primary" id="r-save">Save</button></div>');
+// Daily ECB rates for every currency the feed covers. Inside claude.ai the page can't reach other sites, so manual rates apply there.
+async function refreshRates(force){
+  if (!force && db.ratesChecked === today()) return;
+  try {
+    const r = await fetch("https://api.frankfurter.dev/v1/latest?base=" + encodeURIComponent(db.base), { cache: "no-store" });
+    db.ratesChecked = today();
+    if (r.ok && applyRates(db, await r.json())){ save(); render(); }
+  } catch (e) {}
+}
+$("#m-rates").onclick = function ratesSheet(){
+  const auto = new Set(db.autoRates || []), fmtRate = c => (db.rates[c] < 0.01 ? db.rates[c].toPrecision(3) : db.rates[c].toFixed(4));
+  const curs = [...new Set([...db.wallets.map(w => w.currency), ...db.transactions.filter(t => t.original).map(t => t.original.currency)])].filter(c => c !== db.base).sort();
+  openSheet('<h2>Currencies</h2><label class="fld">Main currency (totals and budgets)<input id="r-base" maxlength="3" value="' + db.base + '" style="text-transform:uppercase"></label>' +
+    '<p class="mini">' + (db.ratesDate ? 'Exchange rates from the European Central Bank, as of ' + esc(db.ratesDate) + '. They update once a day when Tally is online.'
+      : 'Exchange rates load from the European Central Bank when Tally is online.') + ' Payments in another currency are converted into the wallet\'s currency and keep the original amount.</p>' +
+    (curs.length ? '<div class="rows" style="margin-bottom:13px">' + curs.map(c => auto.has(c)
+      ? '<div class="li"><span class="mid"><span class="ttl">1 ' + c + ' = ' + fmtRate(c) + ' ' + db.base + '</span></span><span class="pill">ECB</span></div>'
+      : '<label class="fld" style="padding-top:10px">1 ' + c + ' = ? ' + db.base + ' (not in the ECB list, enter it yourself)<input data-rate="' + c + '" inputmode="decimal" value="' + (db.rates[c] || "") + '" placeholder="rate"></label>').join("") + '</div>' : '') +
+    '<div class="btns"><button class="btn ghost" id="r-refresh">Update rates now</button><button class="btn primary" id="r-save">Save</button></div>');
+  $("#r-refresh").onclick = async () => { const before = db.ratesDate; await refreshRates(true); toast(db.ratesDate && db.ratesDate !== before ? "Rates updated" : db.ratesDate ? "Rates are up to date" : "Couldn't reach the rate service"); ratesSheet(); };
   $("#r-save").onclick = () => {
-    const b = $("#r-base").value.trim().toUpperCase(); if (!/^[A-Z]{3}$/.test(b)){ toast("Use a 3-letter code"); return; }
+    const b = $("#r-base").value.trim().toUpperCase(); if (!/^[A-Z]{3}$/.test(b)){ toast("Use a 3-letter code like EUR"); return; }
     $$("[data-rate]").forEach(i => { const v = parseAmount(i.value); if (v > 0) db.rates[i.dataset.rate] = v; else delete db.rates[i.dataset.rate]; });
-    if (b !== db.base){ db.base = b; db.rates = {}; toast("Main currency changed — re-enter rates"); }
+    if (b !== db.base){ db.base = b; db.rates = {}; db.autoRates = []; db.ratesDate = ""; refreshRates(true); }
     save(); closeSheet(); render();
   };
 };
@@ -930,14 +970,17 @@ function handleHash(){
   history.replaceState(null, "", location.pathname + location.search);
   const wid = captureWallet(db, cap);
   const g = guessCategory(db, cap.merchant, cap.cents);
+  const fx = inWalletCurrency(db, cap.cents, cap.currency, wallet(db, wid));
   if (g.sure && wid){ // confident: log it without asking; the toast opens it for correction
-    const tx = addTx(db, { walletId: wid, amount: cap.cents, category: g.category, date: today(), note: cap.merchant, source: "applepay" });
+    const tx = addTx(db, { walletId: wid, amount: fx.amount, original: fx.original, unconverted: fx.unconverted, category: g.category, date: today(), note: cap.merchant, source: "applepay" });
     if (cap.card && !db.cardMap[cap.card]) db.cardMap[cap.card] = wid;
     save(); go("timeline");
-    toast("Logged " + fmt(cap.cents, wallet(db, wid).currency) + " " + (cap.merchant || "") + " → " + category(db, g.category).name + ". Tap to change.", () => txSheet({ tx }));
+    toast("Logged " + fmt(fx.amount, wallet(db, wid).currency) + (fx.original ? " (" + fmt(fx.original.amount, fx.original.currency) + ")" : "") + " " + (cap.merchant || "") +
+      " → " + category(db, g.category).name + ". Tap to change.", () => txSheet({ tx }));
     return;
   }
-  txSheet({ prefill: { cents: cap.cents, walletId: wid, note: cap.merchant, category: g.category, card: cap.card, source: "applepay" } });
+  txSheet({ prefill: { cents: fx.amount, walletId: wid, category: g.category, card: cap.card, source: "applepay",
+    note: cap.merchant + (fx.original ? " (" + fmt(fx.original.amount, fx.original.currency) + ")" : "") } });
 }
 window.addEventListener("hashchange", handleHash);
 // The iPhone app calls this with payments its Shortcuts action saved in the background.
@@ -952,7 +995,7 @@ window.tallyQueue = items => {
 if (materializeRecurring(db)) save();
 go("overview");
 handleHash();
-startCloud();
+startCloud().finally(() => refreshRates());
 </script>
 </body>
 </html>
