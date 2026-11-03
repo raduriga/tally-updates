@@ -1,0 +1,958 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Tally">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap">
+<title>Tally</title>
+<meta name="tally-version" content="202611031823">
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="Local-first budget tracker rebuilt from the Spendee data model: wallets, transfers, recurring, budgets, Revolut CSV and Apple Pay Shortcut capture.">
+<style>
+:root{
+  --bg:#f5f4f8; --surface:#ffffff; --surface-2:#efedf5; --line:#e0dde9;
+  --fg:#1b1730; --muted:#615b78; --faint:#8d88a3;
+  --accent:#5b4bdb; --accent-ink:#3d2fb0; --on-accent:#ffffff;
+  --income:#13895f; --expense:#c8463b; --transfer:#3b6fc8; --warn:#b97a12; --crit:#c8463b;
+  --radius:16px;
+  --sans:"Manrope",system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#100e18; --surface:#18152a; --surface-2:#221e36; --line:#2f2a47;
+  --fg:#eeecf8; --muted:#aaa4c6; --faint:#7a7499;
+  --accent:#9d90ff; --accent-ink:#c6beff; --on-accent:#120e2a;
+  --income:#43d39a; --expense:#f2867a; --transfer:#7aa6f0; --warn:#f0c061; --crit:#f2867a;
+  color-scheme:dark;
+}}
+:root[data-theme="dark"]{
+  --bg:#100e18; --surface:#18152a; --surface-2:#221e36; --line:#2f2a47;
+  --fg:#eeecf8; --muted:#aaa4c6; --faint:#7a7499;
+  --accent:#9d90ff; --accent-ink:#c6beff; --on-accent:#120e2a;
+  --income:#43d39a; --expense:#f2867a; --transfer:#7aa6f0; --warn:#f0c061; --crit:#f2867a;
+  color-scheme:dark;
+}
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--sans);font-size:15px;line-height:1.45;-webkit-text-size-adjust:100%}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:40;background:var(--surface)}
+h1,h2,h3{margin:0;text-wrap:balance}
+button{font-family:inherit;font-size:inherit;color:inherit;cursor:pointer}
+.tnum,.amt,.v,.net{font-variant-numeric:tabular-nums}
+#app{min-height:100%;padding-bottom:calc(68px + env(safe-area-inset-bottom,0px))}
+.screen{display:none;flex-direction:column}
+.screen.active{display:flex}
+header.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:var(--surface);border-bottom:1px solid var(--line);
+  padding-block:12px;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  display:flex;align-items:center;gap:10px;min-height:52px}
+header.bar h1{font-size:19px;font-weight:650;letter-spacing:-.01em}
+.spacer{flex:1}
+.iconbtn{min-width:36px;height:36px;border-radius:99px;border:1px solid var(--line);background:var(--surface-2);display:grid;place-items:center;font-size:16px;line-height:1;padding:0 10px}
+main{padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:16px;display:flex;flex-direction:column;gap:14px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:var(--radius);padding:16px}
+.eyebrow{font-size:11px;font-weight:700;letter-spacing:.07em;text-transform:uppercase;color:var(--faint)}
+.net{font-size:32px;font-weight:720;letter-spacing:-.02em;margin-top:4px}
+.rows{display:flex;flex-direction:column}
+.rows>*+*{border-top:1px solid var(--line)}
+.li{display:flex;align-items:center;gap:12px;padding:11px 0;min-width:0;background:none;border:0;width:100%;text-align:left}
+.li .ic{width:38px;height:38px;border-radius:11px;flex:none;display:grid;place-items:center;font-size:18px;background:var(--surface-2)}
+.li .mid{min-width:0;flex:1}
+.li .ttl{font-weight:570;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .meta{color:var(--muted);font-size:12.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.li .amt{font-weight:650;white-space:nowrap}
+.amt.income{color:var(--income)}.amt.expense{color:var(--expense)}.amt.transfer{color:var(--transfer)}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.stat .k{color:var(--muted);font-size:12.5px;font-weight:550}
+.stat .v{font-size:21px;font-weight:680;letter-spacing:-.01em;margin-top:2px}
+.sectitle{display:flex;align-items:baseline;gap:10px;margin:4px 2px -2px}
+.sectitle h2{font-size:15px;font-weight:650}
+.sectitle .link{margin-left:auto;color:var(--accent);font-weight:600;font-size:13px;background:none;border:0;padding:0}
+.day{font-size:12px;font-weight:700;color:var(--faint);margin:6px 2px -6px;display:flex}
+.day span:last-child{margin-left:auto}
+.bar-track{height:8px;border-radius:99px;background:var(--surface-2);overflow:hidden;margin-top:8px}
+.bar-fill{height:100%;border-radius:99px;background:var(--accent)}
+.bar-fill.warn{background:var(--warn)}.bar-fill.crit{background:var(--crit)}
+.pill{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;padding:3px 9px;border-radius:99px;background:var(--surface-2);color:var(--muted)}
+nav.tabs{position:fixed;left:0;right:0;bottom:0;z-index:35;background:color-mix(in srgb,var(--surface) 92%,transparent);backdrop-filter:blur(12px);
+  border-top:1px solid var(--line);display:flex;padding-bottom:env(safe-area-inset-bottom,0px)}
+nav.tabs button{flex:1;background:none;border:0;padding:8px 2px 6px;display:flex;flex-direction:column;align-items:center;gap:3px;color:var(--faint);font-size:10.5px;font-weight:600}
+nav.tabs button .g{font-size:20px;line-height:1}
+nav.tabs button.on{color:var(--accent)}
+.fab{position:fixed;z-index:36;right:calc(16px + env(safe-area-inset-right,0px));bottom:calc(80px + env(safe-area-inset-bottom,0px));
+  width:56px;height:56px;border-radius:50%;background:var(--accent);color:var(--on-accent);border:0;font-size:28px;display:grid;place-items:center;
+  box-shadow:0 8px 24px color-mix(in srgb,var(--accent) 40%,transparent)}
+.scrim{position:fixed;inset:0;z-index:50;background:rgba(0,0,0,.45);display:none;align-items:flex-end}
+.scrim.open{display:flex}
+.sheet{background:var(--surface);width:100%;max-height:92%;overflow:auto;border-radius:20px 20px 0 0;
+  padding:18px max(16px,env(safe-area-inset-left,0px)) calc(20px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-right,0px))}
+@media (min-width:640px){.scrim{align-items:center;justify-content:center}.sheet{max-width:520px;border-radius:20px}main{max-width:640px;margin:0 auto;width:100%}}
+.sheet h2{font-size:17px;margin-bottom:14px}
+.seg{display:flex;background:var(--surface-2);border-radius:12px;padding:3px;gap:3px;margin-bottom:14px}
+.seg button{flex:1;border:0;background:none;padding:9px;border-radius:9px;font-weight:600;color:var(--muted)}
+.seg button.on{background:var(--surface);color:var(--fg);box-shadow:0 1px 3px rgba(0,0,0,.12)}
+label.fld{display:flex;flex-direction:column;gap:6px;margin-bottom:13px;font-size:12.5px;font-weight:600;color:var(--muted)}
+.fld input,.fld select,.fld textarea{font-family:inherit;font-size:16px;color:var(--fg);background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:12px 13px;width:100%}
+.fld input:focus,.fld select:focus{outline:2px solid var(--accent);outline-offset:1px}
+.amount-in{font-size:30px!important;font-weight:680;text-align:center}
+.btns{display:flex;gap:10px;margin-top:4px}
+.btn{flex:1;border:0;border-radius:12px;padding:14px;font-weight:650;font-size:15px}
+.btn.primary{background:var(--accent);color:var(--on-accent)}
+.btn.ghost{background:var(--surface-2);color:var(--fg)}
+.btn.danger{background:color-mix(in srgb,var(--crit) 14%,transparent);color:var(--crit)}
+.empty{text-align:center;color:var(--muted);padding:36px 20px;display:flex;flex-direction:column;gap:10px;align-items:center}
+.empty .big{font-size:38px}
+.mini{font-size:12.5px;color:var(--faint)}
+.catgrid{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:13px}
+.catgrid button{background:var(--surface-2);border:1px solid var(--line);border-radius:12px;padding:9px 3px;display:flex;flex-direction:column;align-items:center;gap:3px;font-size:10.5px;font-weight:600;color:var(--muted);min-width:0}
+.catgrid button span:last-child{max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.catgrid button.on{border-color:var(--accent);color:var(--fg);background:color-mix(in srgb,var(--accent) 14%,var(--surface-2))}
+.catgrid button .g{font-size:19px}
+.menu .li{padding:13px 0}
+.searchbox{font-family:inherit;font-size:15px;color:var(--fg);background:var(--surface-2);border:1px solid var(--line);border-radius:11px;padding:10px 12px;width:100%}
+.monthnav{display:flex;align-items:center;gap:8px}
+code,.code{font-family:ui-monospace,Menlo,monospace;font-size:12px;background:var(--surface-2);border-radius:6px;padding:2px 5px;word-break:break-all}
+ol.steps{margin:0;padding-left:20px;display:flex;flex-direction:column;gap:6px;font-size:14px}
+#toast{position:fixed;left:50%;transform:translateX(-50%);bottom:calc(92px + env(safe-area-inset-bottom,0px));z-index:60;background:var(--fg);color:var(--bg);padding:10px 16px;border-radius:99px;font-weight:600;font-size:13px;box-shadow:0 6px 20px rgba(0,0,0,.3);max-width:calc(100% - 32px)}
+a{color:var(--accent)}
+</style>
+</head>
+<body>
+<div id="app">
+  <section class="screen active" data-screen="overview">
+    <header class="bar"><h1>Overview</h1><span class="spacer"></span>
+      <div class="monthnav"><button class="iconbtn" data-mon="-1" aria-label="Previous month">‹</button><b id="ov-month" class="tnum"></b><button class="iconbtn" data-mon="1" aria-label="Next month">›</button></div></header>
+    <main id="ov"></main>
+  </section>
+  <section class="screen" data-screen="timeline">
+    <header class="bar"><h1>Timeline</h1><span class="spacer"></span><select id="tl-wallet" class="iconbtn" aria-label="Wallet filter"></select></header>
+    <main><input id="tl-search" class="searchbox" type="search" placeholder="Search notes, categories, labels" aria-label="Search"><div id="tl"></div></main>
+  </section>
+  <section class="screen" data-screen="budgets">
+    <header class="bar"><h1>Budgets</h1><span class="spacer"></span><button class="iconbtn" id="add-budget">+ Budget</button></header>
+    <main id="bd"></main>
+  </section>
+  <section class="screen" data-screen="wallets">
+    <header class="bar"><h1>Wallets</h1><span class="spacer"></span><button class="iconbtn" id="add-wallet">+ Wallet</button></header>
+    <main id="wl"></main>
+  </section>
+  <section class="screen" data-screen="more">
+    <header class="bar"><h1>More</h1></header>
+    <main>
+      <div class="card menu rows">
+        <button class="li" id="m-revolut"><span class="ic">📄</span><span class="mid"><span class="ttl">Import bank CSV</span><span class="meta" style="display:block">Revolut statement or any bank CSV</span></span></button>
+        <button class="li" id="m-shortcut"><span class="ic">📲</span><span class="mid"><span class="ttl">Apple Pay auto-capture</span><span class="meta" style="display:block">iOS Shortcut logs each card tap</span></span></button>
+        <button class="li" id="m-recurring"><span class="ic">🔁</span><span class="mid"><span class="ttl">Scheduled &amp; recurring</span></span></button>
+        <button class="li" id="m-rates"><span class="ic">💱</span><span class="mid"><span class="ttl">Currencies &amp; rates</span></span></button>
+        <button class="li" id="m-export"><span class="ic">💾</span><span class="mid"><span class="ttl">Back up (download JSON)</span></span></button>
+        <button class="li" id="m-import"><span class="ic">♻️</span><span class="mid"><span class="ttl">Restore backup</span></span></button>
+        <button class="li" id="m-theme"><span class="ic">🌓</span><span class="mid"><span class="ttl">Theme</span></span></button>
+        <button class="li" id="m-reset"><span class="ic">🗑️</span><span class="mid"><span class="ttl">Erase all data</span></span></button>
+      </div>
+      <p class="mini" id="sync-note">Everything is stored only in this browser. No account, no server. Back up regularly.</p>
+    </main>
+  </section>
+</div>
+<button class="fab" id="fab" aria-label="Add transaction">+</button>
+<nav class="tabs">
+  <button data-go="overview" class="on"><span class="g">◔</span>Overview</button>
+  <button data-go="timeline"><span class="g">☰</span>Timeline</button>
+  <button data-go="budgets"><span class="g">◎</span>Budgets</button>
+  <button data-go="wallets"><span class="g">▣</span>Wallets</button>
+  <button data-go="more"><span class="g">⋯</span>More</button>
+</nav>
+<div class="scrim" id="scrim"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
+<input type="file" id="file-csv" accept=".csv,text/csv,text/plain" hidden>
+<input type="file" id="file-json" accept=".json,application/json" hidden>
+
+<script id="core">
+// ---- core: pure data logic (no DOM). Money is integer cents; dates are local "YYYY-MM-DD". ----
+// shortcut: cents assumes 2-decimal currencies (JPY/HUF shown x100 off), add per-currency exponents if needed.
+const SYS = { transfer: "transfer", adjust: "adjust" };
+const DEFAULT_CATS = [
+  ["groceries","Groceries","🛒","expense"],["restaurants","Restaurants","🍽️","expense"],["coffee","Coffee","☕","expense"],
+  ["transport","Transport","🚌","expense"],["shopping","Shopping","🛍️","expense"],["bills","Bills","🧾","expense"],
+  ["home","Rent & home","🏠","expense"],["health","Health","💊","expense"],["fun","Entertainment","🎬","expense"],
+  ["travel","Travel","✈️","expense"],["subs","Subscriptions","🔁","expense"],["cash","Cash","🏧","expense"],
+  ["gifts","Gifts","🎁","expense"],["fees","Fees","🏦","expense"],["other","Other","📦","expense"],
+  ["salary","Salary","💼","income"],["refunds","Refunds","↩️","income"],["interest","Interest","📈","income"],
+  ["giftsin","Gifts received","🎉","income"],["otherin","Other income","💰","income"],
+  [SYS.transfer,"Transfer","⇄","system"],[SYS.adjust,"Balance adjustment","⚖️","system"],
+].map(([id,name,icon,type]) => ({ id, name, icon, type }));
+
+function emptyDb(){
+  return { v: 1, base: "EUR", rates: {}, wallets: [], categories: DEFAULT_CATS.map(c => ({ ...c })),
+    transactions: [], templates: [], budgets: [], cardMap: {} };
+}
+function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
+function p2(x){ return String(x).padStart(2, "0"); }
+function today(d = new Date()){ return d.getFullYear() + "-" + p2(d.getMonth() + 1) + "-" + p2(d.getDate()); }
+function ymOf(date){ return date.slice(0, 7); }
+function shiftYm(ym, n){ let [y, m] = ym.split("-").map(Number); m += n; while (m < 1){ m += 12; y--; } while (m > 12){ m -= 12; y++; } return y + "-" + p2(m); }
+
+function parseAmount(s){
+  if (s == null) return null;
+  s = String(s).replace(/["\s ]/g, "").replace(/[^\d.,()+-]/g, "");
+  if (!s) return null;
+  let neg = false;
+  if (/^\(.*\)$/.test(s)){ neg = true; s = s.slice(1, -1); }
+  if (s[0] === "-"){ neg = true; s = s.slice(1); } else if (s[0] === "+") s = s.slice(1);
+  const hasC = s.includes(","), hasD = s.includes(".");
+  if (hasC && hasD){ if (s.lastIndexOf(",") > s.lastIndexOf(".")) s = s.replace(/\./g, "").replace(",", "."); else s = s.replace(/,/g, ""); }
+  else if (hasC){ if (/,\d{1,2}$/.test(s)) s = s.replace(",", "."); else s = s.replace(/,/g, ""); }
+  const n = parseFloat(s);
+  if (isNaN(n)) return null;
+  return neg ? -n : n;
+}
+function toCents(s){ const n = typeof s === "number" ? s : parseAmount(s); return n == null ? null : Math.round(n * 100); }
+function currencyFromText(s, fallback){
+  s = String(s || "");
+  const m = s.match(/\b([A-Z]{3})\b/); if (m) return m[1];
+  if (s.includes("€")) return "EUR"; if (s.includes("£")) return "GBP"; if (s.includes("$")) return "USD";
+  if (/kč/i.test(s)) return "CZK"; if (/zł/i.test(s)) return "PLN"; if (/\blei\b/i.test(s)) return "RON";
+  return fallback;
+}
+function rate(db, cur){ return cur === db.base ? 1 : (db.rates[cur] || 1); } // 1 unit of cur = rate base units
+function convert(db, cents, from, to){ return from === to ? cents : Math.round(cents * rate(db, from) / rate(db, to)); }
+
+function wallet(db, id){ return db.wallets.find(w => w.id === id); }
+function category(db, id){ return db.categories.find(c => c.id === id) || { id, name: id, icon: "📦", type: "expense" }; }
+function txKind(t){ return t.category === SYS.transfer ? "transfer" : t.amount < 0 ? "expense" : "income"; }
+function counts(t){ return t.countInOverview !== false && t.category !== SYS.transfer && t.category !== SYS.adjust; }
+function txBase(db, t){ const w = wallet(db, t.walletId); return convert(db, t.amount, w ? w.currency : db.base, db.base); }
+
+function walletBalance(db, wid, asOf = today()){
+  const w = wallet(db, wid); if (!w) return 0;
+  return db.transactions.reduce((s, t) => t.walletId === wid && t.date <= asOf ? s + t.amount : s, w.startingBalance || 0);
+}
+function totalBalance(db, asOf){ return db.wallets.filter(w => !w.hidden).reduce((s, w) => s + convert(db, walletBalance(db, w.id, asOf), w.currency, db.base), 0); }
+function monthTxs(db, ym){ return db.transactions.filter(t => ymOf(t.date) === ym && t.date <= today() && counts(t)); }
+function monthFlow(db, ym){
+  let income = 0, expense = 0;
+  for (const t of monthTxs(db, ym)){ const v = txBase(db, t); if (v > 0) income += v; else expense -= v; }
+  return { income, expense, net: income - expense };
+}
+function categorySpend(db, ym){
+  const by = {};
+  for (const t of monthTxs(db, ym)){ const v = txBase(db, t); if (v < 0) by[t.category] = (by[t.category] || 0) - v; }
+  return Object.entries(by).map(([category, cents]) => ({ category, cents })).sort((a, b) => b.cents - a.cents);
+}
+function budgetSpent(db, b, ym){
+  return monthTxs(db, ym).reduce((s, t) => {
+    if (b.categories.length && !b.categories.includes(t.category)) return s;
+    if (b.walletIds && b.walletIds.length && !b.walletIds.includes(t.walletId)) return s;
+    const v = convert(db, txBase(db, t), db.base, b.currency || db.base);
+    return v < 0 ? s - v : s;
+  }, 0);
+}
+
+function addTx(db, t){
+  const tx = { id: uid(), note: "", labels: [], countInOverview: true, source: "manual", ...t };
+  db.transactions.push(tx); return tx;
+}
+// A transfer is two linked transactions, like Spendee's linkedTransactionPath pair.
+function addTransfer(db, fromId, toId, cents, date, note = "", toCents){
+  const from = wallet(db, fromId), to = wallet(db, toId);
+  const a = addTx(db, { walletId: fromId, amount: -Math.abs(cents), category: SYS.transfer, date, note });
+  const b = addTx(db, { walletId: toId, amount: toCents != null ? Math.abs(toCents) : convert(db, Math.abs(cents), from.currency, to.currency), category: SYS.transfer, date, note });
+  a.linkedId = b.id; b.linkedId = a.id;
+  return [a, b];
+}
+function deleteTx(db, id){
+  const t = db.transactions.find(x => x.id === id); if (!t) return;
+  db.transactions = db.transactions.filter(x => x.id !== id && x.id !== t.linkedId);
+}
+function adjustBalance(db, wid, targetCents, date = today()){
+  const diff = targetCents - walletBalance(db, wid, date);
+  if (!diff) return null;
+  return addTx(db, { walletId: wid, amount: diff, category: SYS.adjust, date, countInOverview: false, note: "Balance adjustment" });
+}
+function nextDate(date, repeat){
+  const [y, m, d] = date.split("-").map(Number);
+  if (repeat === "daily" || repeat === "weekly" || repeat === "biweekly"){
+    const dt = new Date(y, m - 1, d + ({ daily: 1, weekly: 7, biweekly: 14 })[repeat]); return today(dt);
+  }
+  const add = ({ monthly: 1, quarterly: 3, yearly: 12 })[repeat];
+  let nm = m - 1 + add, ny = y + Math.floor(nm / 12); nm %= 12;
+  const last = new Date(ny, nm + 1, 0).getDate();
+  return ny + "-" + p2(nm + 1) + "-" + p2(Math.min(d, last)); // keep 31st as month-end
+}
+// Recurring templates create real transactions once their date arrives (Spendee "transactionTemplates").
+function materializeRecurring(db, upTo = today()){
+  let n = 0;
+  for (const tp of db.templates){
+    while (tp.next <= upTo && (!tp.endDate || tp.next <= tp.endDate)){
+      if (tp.transferTo) addTransfer(db, tp.walletId, tp.transferTo, tp.amount, tp.next, tp.note).forEach(t => t.templateId = tp.id);
+      else addTx(db, { walletId: tp.walletId, amount: tp.amount, category: tp.category, date: tp.next, note: tp.note, labels: tp.labels || [], templateId: tp.id });
+      tp.next = nextDate(tp.next, tp.repeat); n++;
+      if (n > 5000) return n; // guard against a corrupt template looping
+    }
+  }
+  return n;
+}
+
+// ---- categorisation ----
+const RULES = [
+  [/lidl|aldi|billa|albert|kaufland|tesco|penny|rewe|edeka|carrefour|mercadona|auchan|spar|coop|supermarket|grocery|lidl|biedronka|żabka|zabka|profi|mega image|rohlik|rohlík|dm drogerie|globus/i,"groceries"],
+  [/starbucks|costa|caff|coffee|kavárna|kavarna|espresso|tchibo/i,"coffee"],
+  [/restaurant|bistro|pizza|burger|kfc|mcdonald|wolt|uber eats|deliveroo|glovo|foodora|bolt food|just ?eat|damejidlo|sushi|kebab/i,"restaurants"],
+  [/uber|bolt|taxi|lyft|free now|metro|transit|railway|\brail|regiojet|flixbus|čd|ceske drahy|\bmhd\b|fuel|petrol|shell|omv|orlen|mol\b|benzin|parking/i,"transport"],
+  [/ryanair|wizz|easyjet|lufthansa|airbnb|booking\.com|hotel|hostel|expedia|airline/i,"travel"],
+  [/netflix|spotify|disney|hbo|youtube|apple\.com\/bill|icloud|google one|patreon|chatgpt|openai|adobe|prime video/i,"subs"],
+  [/amazon|zalando|zara|h&m|ikea|alza|allegro|aliexpress|temu|shein|decathlon|mall\.cz/i,"shopping"],
+  [/vodafone|t-mobile|o2|orange|electric|energie|\bgas\b|cez|pre\b|insurance|pojist|internet|utility/i,"bills"],
+  [/rent|nájem|najem|mortgage|landlord|hypot/i,"home"],
+  [/pharmacy|lékárna|lekarna|apotheke|doctor|dental|clinic|gym|fitness/i,"health"],
+  [/cinema|kino|steam|playstation|xbox|concert|ticket|theatre|bar\b|pub\b/i,"fun"],
+  [/\batm\b|cash withdrawal|bankomat|výběr|vyber/i,"cash"],
+];
+function catFromDesc(s, amount){
+  if (amount > 0){
+    if (/salary|payroll|mzda|plat\b|gehalt/i.test(s || "")) return "salary";
+    if (/refund|return|vrácení|vraceni/i.test(s || "")) return "refunds";
+    if (/interest|úrok|urok|cashback|reward/i.test(s || "")) return "interest";
+    return "otherin";
+  }
+  for (const [re, id] of RULES) if (re.test(s || "")) return id;
+  return "other";
+}
+// First meaningful word of a merchant: "LIDL 1234 PRAHA 5" -> "lidl", "Wolt Praha" -> "wolt".
+const STOP = new Set(["the", "www", "pos", "card", "payment", "platba", "kartou", "to", "from", "sumup", "zettle", "sq"]);
+function merchantKey(s){
+  return String(s || "").toLowerCase().normalize("NFD").replace(/[̀-ͯ]/g, "").split(/[^a-z]+/)
+    .find(w => w.length >= 3 && !STOP.has(w)) || "";
+}
+// Like Spendee's CategoryResolver: your last category at this merchant wins, then keyword rules.
+function guessCategory(db, merchant, cents){
+  const k = merchantKey(merchant);
+  if (k){
+    let best = null;
+    for (const t of db.transactions)
+      if (t.category !== SYS.transfer && t.category !== SYS.adjust && Math.sign(t.amount) === Math.sign(cents) &&
+          merchantKey(t.note) === k && (!best || t.date >= best.date)) best = t;
+    if (best) return { category: best.category, sure: true };
+  }
+  const c = catFromDesc(merchant, cents);
+  return { category: c, sure: c !== "other" && c !== "otherin" };
+}
+
+// ---- CSV ----
+function detectDelim(line){ const c = { ",": 0, ";": 0, "\t": 0 }; for (const ch of line) if (ch in c) c[ch]++; return Object.keys(c).sort((a, b) => c[b] - c[a])[0]; }
+function splitLine(line, d){
+  const out = []; let cur = "", q = false;
+  for (let i = 0; i < line.length; i++){
+    const ch = line[i];
+    if (q){ if (ch === '"'){ if (line[i + 1] === '"'){ cur += '"'; i++; } else q = false; } else cur += ch; }
+    else { if (ch === '"') q = true; else if (ch === d){ out.push(cur); cur = ""; } else cur += ch; }
+  }
+  out.push(cur); return out.map(s => s.trim());
+}
+function parseDate(s){
+  if (!s) return null; s = String(s).trim();
+  let m = s.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/); if (m) return m[1] + "-" + p2(m[2]) + "-" + p2(m[3]);
+  m = s.match(/^(\d{1,2})[\/.\-](\d{1,2})[\/.\-](\d{2,4})/);
+  if (m){ let a = +m[1], b = +m[2], y = m[3]; if (y.length === 2) y = "20" + y;
+    const [day, mon] = a > 12 ? [a, b] : b > 12 ? [b, a] : [a, b]; // ambiguous -> EU day-first
+    return y + "-" + p2(mon) + "-" + p2(day); }
+  const t = Date.parse(s); return isNaN(t) ? null : today(new Date(t));
+}
+function csvLines(text){ return String(text).replace(/^﻿/, "").split(/\r\n|\n|\r/).filter(l => l.trim() !== ""); }
+
+// Revolut personal statement: Type,Product,Started Date,Completed Date,Description,Amount,Fee,Currency,State,Balance
+function parseRevolut(text){
+  const lines = csvLines(text); if (lines.length < 2) return null;
+  const d = detectDelim(lines[0]);
+  const h = splitLine(lines[0], d).map(x => x.toLowerCase());
+  const col = n => h.indexOf(n);
+  const ci = { type: col("type"), product: col("product"), started: col("started date"), completed: col("completed date"),
+    desc: col("description"), amount: col("amount"), fee: col("fee"), currency: col("currency"), state: col("state"), balance: col("balance") };
+  if ([ci.type, ci.started, ci.desc, ci.amount, ci.currency, ci.state].some(i => i < 0)) return null;
+  const rows = [];
+  for (let i = 1; i < lines.length; i++){
+    const r = splitLine(lines[i], d);
+    const state = (r[ci.state] || "").toUpperCase();
+    if (state !== "COMPLETED") continue; // skip PENDING / REVERTED / DECLINED / FAILED
+    const date = parseDate(r[ci.completed] || r[ci.started]); if (!date) continue;
+    const amt = toCents(r[ci.amount]), fee = ci.fee >= 0 ? toCents(r[ci.fee]) || 0 : 0;
+    if (amt == null) continue;
+    const cents = amt - fee; if (!cents) continue;
+    const type = (r[ci.type] || "").toUpperCase(), desc = (r[ci.desc] || "").trim() || type;
+    const internal = type === "EXCHANGE" || type === "TOPUP" || /^to (savings|pocket)|^from (savings|pocket)/i.test(desc);
+    rows.push({ date, desc: desc.slice(0, 80), cents, currency: (r[ci.currency] || "").toUpperCase(),
+      product: (ci.product >= 0 ? r[ci.product] : "") || "Current",
+      category: internal ? SYS.transfer : type === "ATM" ? "cash" : type === "FEE" ? "fees" : catFromDesc(desc, cents),
+      countInOverview: !internal, balance: ci.balance >= 0 ? toCents(r[ci.balance]) : null,
+      key: "rev|" + (r[ci.started] || date) + "|" + r[ci.amount] + "|" + r[ci.currency] + "|" + desc });
+  }
+  return { kind: "revolut", rows };
+}
+function parseGenericCSV(text){
+  const lines = csvLines(text); if (lines.length < 2) return { rows: [], error: "That file looks empty." };
+  const d = detectDelim(lines[0]);
+  const h = splitLine(lines[0], d).map(x => x.toLowerCase());
+  const find = names => { for (let i = 0; i < h.length; i++) for (const n of names) if (h[i].includes(n)) return i; return -1; };
+  const ci = { date: find(["date","datum","booking","posted","fecha","data"]),
+    desc: find(["description","payee","name","details","reference","memo","narrative","merchant","counterparty","protistrana","popis","zpráva","beschreibung","verwendungszweck","concepto","omschrijving","descrizione"]),
+    amount: find(["amount","částka","castka","value","betrag","montant","importe","importo","bedrag","kwota","suma"]),
+    debit: find(["debit","paid out","money out","withdrawal"]), credit: find(["credit","paid in","money in","deposit"]),
+    currency: find(["currency","měna","mena","währung","devise","moneda"]) };
+  if (ci.date < 0 || (ci.amount < 0 && ci.debit < 0 && ci.credit < 0)) return { rows: [], error: "Couldn't find date and amount columns in that CSV." };
+  const rows = [];
+  for (let i = 1; i < lines.length; i++){
+    const r = splitLine(lines[i], d); if (r.length < 2) continue;
+    const date = parseDate(r[ci.date]); if (!date) continue;
+    let cents;
+    if (ci.amount >= 0) cents = toCents(r[ci.amount]);
+    else { const deb = ci.debit >= 0 ? toCents(r[ci.debit]) : null, cre = ci.credit >= 0 ? toCents(r[ci.credit]) : null;
+      cents = deb ? -Math.abs(deb) : cre ? Math.abs(cre) : null; }
+    if (!cents) continue;
+    const desc = ((ci.desc >= 0 ? r[ci.desc] : "") || "").trim() || "Transaction";
+    rows.push({ date, desc: desc.slice(0, 80), cents, currency: ci.currency >= 0 ? (r[ci.currency] || "").toUpperCase() : "",
+      category: catFromDesc(desc, cents), countInOverview: true, key: "csv|" + date + "|" + cents + "|" + desc });
+  }
+  return { kind: "generic", rows };
+}
+function parseAnyCSV(text){ return parseRevolut(text) || parseGenericCSV(text); }
+
+// Revolut rows go to one wallet per product+currency ("Revolut Current EUR"); generic rows to the chosen wallet.
+function importRows(db, parsed, targetWalletId){
+  const seen = new Set(db.transactions.map(t => t.importKey).filter(Boolean));
+  const created = new Map(); // new Revolut wallet id -> latest row (by date) carrying Revolut's running balance
+  let added = 0, dup = 0;
+  for (const r of parsed.rows){
+    if (seen.has(r.key)){ dup++; continue; }
+    let wid = targetWalletId;
+    if (parsed.kind === "revolut"){
+      const name = "Revolut " + r.product + " " + r.currency;
+      let w = db.wallets.find(x => x.name === name);
+      if (!w){ w = { id: uid(), name, currency: r.currency || db.base, startingBalance: 0, type: "bank" }; db.wallets.push(w); created.set(w.id, null); }
+      wid = w.id;
+      const last = created.get(wid);
+      if (created.has(wid) && r.balance != null && (!last || r.date >= last.date)) created.set(wid, r);
+    }
+    const category = r.category === "other" || r.category === "otherin" ? guessCategory(db, r.desc, r.cents).category : r.category;
+    addTx(db, { walletId: wid, amount: r.cents, category, date: r.date, note: r.desc, countInOverview: r.countInOverview, importKey: r.key, source: parsed.kind });
+    seen.add(r.key); added++;
+  }
+  // Open each new wallet at the balance Revolut reports, so totals match the bank even for a partial statement.
+  for (const [wid, r] of created) if (r) wallet(db, wid).startingBalance = r.balance - walletBalance(db, wid, r.date);
+  return { added, dup };
+}
+
+// Apple Pay capture: an iOS Shortcut opens the page with  #add-<base64url("amount|merchant|card")>
+// (artifact links pass only plain #anchors) or, self-hosted, #add?amount=…&merchant=…&card=…
+function parseCaptureHash(hash){
+  hash = hash || "";
+  let raw = "", merchant = "", card = "", cur = "";
+  const b64 = /^#add-([A-Za-z0-9_-]+)$/.exec(hash);
+  if (b64){
+    try {
+      const bin = atob(b64[1].replace(/-/g, "+").replace(/_/g, "/"));
+      [raw = "", merchant = "", card = ""] = new TextDecoder().decode(Uint8Array.from(bin, c => c.charCodeAt(0))).split("|");
+    } catch (e) { return null; }
+  } else if (/^#add(\?|$)/.test(hash)){
+    const q = new URLSearchParams(hash.replace(/^#add\??/, ""));
+    raw = q.get("amount") || ""; merchant = q.get("merchant") || ""; card = q.get("card") || ""; cur = q.get("currency") || "";
+  } else return null;
+  const cents = toCents(raw);
+  if (cents == null) return null;
+  merchant = merchant.trim().slice(0, 80);
+  return { cents: -Math.abs(cents), currency: currencyFromText(raw + " " + cur, ""), merchant,
+    card: card.trim().slice(0, 60), category: catFromDesc(merchant, -1) };
+}
+
+// Wallet for a captured card payment: the one used for this card before, a wallet named after the card, then by currency.
+function captureWallet(db, cap){
+  const card = cap.card.toLowerCase(), cur = w => !cap.currency || w.currency === cap.currency;
+  return db.cardMap[cap.card] || (db.wallets.find(w => card && w.name.toLowerCase().includes(card) && cur(w)) || db.wallets.find(cur) || db.wallets[0] || {}).id;
+}
+// Payments queued by the iPhone app's "Log payment in Tally" action: [{id, amount, merchant, card, date}].
+// Returns ids safe to drop from the queue (stored, already stored, or unreadable); kept ones wait for a wallet.
+function importQueued(db, items){
+  const seen = new Set(db.transactions.map(t => t.importKey).filter(Boolean));
+  const ack = [];
+  let added = 0, unsure = 0;
+  for (const it of items){
+    const key = "ap|" + it.id, cents = toCents(it.amount);
+    if (seen.has(key) || !cents){ ack.push(it.id); continue; }
+    const cap = { cents: -Math.abs(cents), currency: currencyFromText(it.amount, ""), merchant: String(it.merchant || "").trim().slice(0, 80), card: String(it.card || "").trim().slice(0, 60) };
+    const wid = captureWallet(db, cap);
+    if (!wid) continue;
+    const g = guessCategory(db, cap.merchant, cap.cents);
+    if (!g.sure) unsure++;
+    addTx(db, { walletId: wid, amount: cap.cents, category: g.category, date: /^\d{4}-\d{2}-\d{2}$/.test(it.date) ? it.date : today(),
+      note: cap.merchant, source: "applepay", importKey: key });
+    if (cap.card && !db.cardMap[cap.card]) db.cardMap[cap.card] = wid;
+    seen.add(key); ack.push(it.id); added++;
+  }
+  return { added, unsure, ack };
+}
+
+function validateBackup(o){
+  return o && typeof o === "object" && Array.isArray(o.wallets) && Array.isArray(o.transactions) && Array.isArray(o.categories)
+    && o.transactions.every(t => t && typeof t.id === "string" && Number.isInteger(t.amount) && /^\d{4}-\d{2}-\d{2}$/.test(t.date));
+}
+</script>
+
+<script>
+// ---- UI ----
+const KEY = "tally.v1";
+const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAll(s)];
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+let db = load(), curYm = ymOf(today()), screen = "overview";
+
+function load(){
+  try { const raw = localStorage.getItem(KEY); if (raw){ const o = JSON.parse(raw); if (validateBackup(o)) return o; } } catch (e) {}
+  const d = emptyDb(); d.wallets.push({ id: uid(), name: "Cash", currency: "EUR", startingBalance: 0, type: "cash" }); return d;
+}
+// Inside the iPhone app (spendee/ios) the native side keeps the data in a file and shares backups.
+const nativeApp = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tally;
+function save(){
+  if (cloudState === "loading") editedEarly = true;
+  let ok = true;
+  const json = JSON.stringify(db);
+  try { localStorage.setItem(KEY, json); } catch (e) { ok = false; }
+  if (nativeApp){ try { nativeApp.postMessage({ type: "save", data: json }); ok = true; } catch (e) {} }
+  if (cloud) schedulePush();
+  else if (!ok) toast("Couldn't save in this browser. Back up from More now.");
+}
+try { navigator.storage && navigator.storage.persist && navigator.storage.persist(); } catch (e) {}
+
+// ---- sync: opened as a Claude artifact, data also lives in the viewer's private store (data/users/<id>/) ----
+// Settings in one document, transactions in one document per month, written only when they change.
+// shortcut: whole-document writes, last writer wins between devices; fine for one person, not for live co-editing.
+let cloud = null, cloudState = "off", pushed = {}, pushTimer = null, pushing = false, dirty = false, editedEarly = false;
+function shards(d){
+  const { transactions, ...meta } = d, out = { meta };
+  for (const t of transactions){ const k = "m-" + ymOf(t.date); (out[k] = out[k] || { items: [] }).items.push(t); }
+  return out;
+}
+function assemble(docs){
+  const d = JSON.parse(JSON.stringify(docs.meta || {}));
+  d.transactions = Object.keys(docs).filter(k => k.startsWith("m-")).flatMap(k => JSON.parse(JSON.stringify(docs[k].items || [])));
+  return d;
+}
+function syncNote(){
+  const el = $("#sync-note"); if (!el) return;
+  el.textContent = ({
+    on: "Synced to your Claude account. Only you can see this data, on any device where you open this page.",
+    loading: "Connecting to your Claude account…",
+    offline: "Couldn't reach your Claude account, so you're seeing the copy saved in this browser. Changes sync next time.",
+    error: "Last sync failed. Your changes are kept in this browser and sync on your next change.",
+    off: nativeApp ? "Everything is stored on this iPhone, inside the Tally app. No account, no server. Back up regularly."
+      : "Everything is stored only in this browser. No account, no server. Back up regularly.",
+  })[cloudState];
+}
+const withTimeout = (p, ms) => Promise.race([p, new Promise((_, rej) => setTimeout(() => rej({ code: "timeout" }), ms))]);
+async function retryOnce(fn){
+  try { return await fn(); }
+  catch (e) { if (e && e.code === "unavailable"){ await new Promise(r => setTimeout(r, 400 + Math.random() * 800)); return fn(); } throw e; }
+}
+async function startCloud(){
+  const c = window.claude;
+  if (!c || !c.use){ syncNote(); return; }
+  cloudState = "loading"; syncNote();
+  const [store, user] = await Promise.all([c.use("db"), c.use("user")]);
+  const id = user ? await user.id() : null;
+  if (!store || !id){ cloudState = "off"; syncNote(); return; }
+  const col = store.collection("data/users/" + id);
+  let snap;
+  try { snap = await withTimeout(col.get(), 10000); }
+  catch (e) { cloudState = "offline"; syncNote(); return; }
+  cloud = col;
+  if (!snap.empty){
+    const docs = {}; snap.docs.forEach(s => { docs[s.id] = s.data(); pushed[s.id] = JSON.stringify(s.data()); });
+    const remote = assemble(docs);
+    if (validateBackup(remote)){
+      if (editedEarly){ // keep anything added on this device while the account was loading
+        const ids = new Set(remote.transactions.map(t => t.id));
+        db.transactions.forEach(t => { if (!ids.has(t.id)) remote.transactions.push(t); });
+      }
+      db = remote;
+    }
+  }
+  cloudState = "on"; materializeRecurring(db); save(); syncNote(); render();
+}
+function schedulePush(){ clearTimeout(pushTimer); pushTimer = setTimeout(pushNow, 500); }
+async function pushNow(){
+  if (!cloud) return;
+  if (pushing){ dirty = true; return; }
+  pushing = true;
+  try {
+    const sh = shards(db);
+    for (const [k, body] of Object.entries(sh)){
+      const json = JSON.stringify(body);
+      if (pushed[k] === json) continue;
+      if (json.length > 250000) throw { code: "too_big", k };
+      await retryOnce(() => cloud.doc(k).set(JSON.parse(json)));
+      pushed[k] = json;
+    }
+    for (const k of Object.keys(pushed)) if (!sh[k]){ await retryOnce(() => cloud.doc(k).delete()); delete pushed[k]; }
+    cloudState = "on";
+  } catch (e) {
+    cloudState = "error";
+    toast(e && e.code === "quota_exceeded" ? "Your Tally storage is full. Delete old wallets or transactions to keep syncing."
+      : e && e.code === "too_big" ? "One month has too many transactions to sync. They're kept in this browser."
+      : "Couldn't sync. Your changes are kept in this browser and sync on your next change.");
+  }
+  pushing = false; syncNote();
+  if (dirty){ dirty = false; schedulePush(); }
+}
+
+function ask(question, okLabel, onOk){
+  openSheet('<h2>' + esc(question) + '</h2><div class="btns"><button class="btn ghost" id="a-no">Cancel</button><button class="btn danger" id="a-yes">' + esc(okLabel) + '</button></div>');
+  $("#a-no").onclick = closeSheet;
+  $("#a-yes").onclick = () => { closeSheet(); onOk(); };
+}
+
+function fmt(cents, cur = db.base, sign = false){
+  let s;
+  try { s = new Intl.NumberFormat(undefined, { style: "currency", currency: cur || db.base }).format(Math.abs(cents) / 100); }
+  catch (e) { s = (Math.abs(cents) / 100).toFixed(2) + " " + cur; }
+  return (cents < 0 ? "−" : sign && cents > 0 ? "+" : "") + s;
+}
+function monthName(ym){ const [y, m] = ym.split("-").map(Number); return new Date(y, m - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" }); }
+function dayName(d){ const [y, m, dd] = d.split("-").map(Number); return new Date(y, m - 1, dd).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short", year: "numeric" }); }
+function toast(msg, onTap){ let t = $("#toast"); if (!t){ t = document.createElement("div"); t.id = "toast"; t.setAttribute("role", "status"); document.body.appendChild(t); }
+  t.textContent = msg; t.hidden = false; t.style.cursor = onTap ? "pointer" : "";
+  t.onclick = onTap ? () => { t.hidden = true; onTap(); } : null;
+  clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, onTap ? 6000 : 2800); }
+function openSheet(html){ $("#sheet").innerHTML = html; $("#scrim").classList.add("open"); }
+function closeSheet(){ $("#scrim").classList.remove("open"); }
+$("#scrim").addEventListener("click", e => { if (e.target.id === "scrim") closeSheet(); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
+
+function txRow(t){
+  const c = category(db, t.category), w = wallet(db, t.walletId), k = txKind(t);
+  let title = t.note || c.name;
+  if (k === "transfer"){ const o = db.transactions.find(x => x.id === t.linkedId), ow = o && wallet(db, o.walletId);
+    title = (t.amount < 0 ? "To " : "From ") + (ow ? ow.name : "wallet") + (t.note ? " · " + t.note : ""); }
+  const meta = [w ? w.name : "?", t.note ? c.name : "", ...(t.labels || []).map(l => "#" + l), t.templateId ? "🔁" : ""].filter(Boolean).join(" · ");
+  return '<button class="li" data-tx="' + t.id + '"><span class="ic">' + c.icon + '</span><span class="mid"><span class="ttl" style="display:block">' + esc(title) +
+    '</span><span class="meta" style="display:block">' + esc(meta) + '</span></span><span class="amt ' + k + '">' + fmt(t.amount, w ? w.currency : db.base, true) + '</span></button>';
+}
+
+function renderOverview(){
+  $("#ov-month").textContent = monthName(curYm);
+  const f = monthFlow(db, curYm), cats = categorySpend(db, curYm), max = cats[0] ? cats[0].cents : 1;
+  const recent = db.transactions.filter(t => t.date <= today()).sort((a, b) => b.date.localeCompare(a.date) || 0).slice(0, 5);
+  const budgets = db.budgets.slice(0, 3);
+  $("#ov").innerHTML =
+    '<div class="card"><div class="eyebrow">Total balance</div><div class="net">' + fmt(totalBalance(db), db.base) + '</div></div>' +
+    '<div class="grid2"><div class="card stat"><div class="k">Income</div><div class="v" style="color:var(--income)">' + fmt(f.income) +
+    '</div></div><div class="card stat"><div class="k">Expenses</div><div class="v" style="color:var(--expense)">' + fmt(f.expense) + '</div></div></div>' +
+    '<div class="card stat"><div class="k">Cash flow · ' + esc(monthName(curYm)) + '</div><div class="v">' + fmt(f.net, db.base, true) + '</div></div>' +
+    '<div class="sectitle"><h2>Spending by category</h2></div><div class="card">' +
+    (cats.length ? cats.map(x => { const c = category(db, x.category);
+      return '<div style="margin:6px 0 12px"><div style="display:flex;gap:8px"><span>' + c.icon + ' ' + esc(c.name) + '</span><span class="spacer"></span><b class="tnum">' + fmt(x.cents) +
+        '</b><span class="mini tnum" style="width:42px;text-align:right">' + Math.round(x.cents / f.expense * 100) + '%</span></div><div class="bar-track"><div class="bar-fill" style="width:' + (x.cents / max * 100).toFixed(1) + '%"></div></div></div>'; }).join("")
+      : '<div class="empty"><div class="big">🧾</div>No spending this month yet.</div>') + '</div>' +
+    (budgets.length ? '<div class="sectitle"><h2>Budgets</h2><button class="link" data-go="budgets">All</button></div>' + budgets.map(budgetCard).join("") : "") +
+    '<div class="sectitle"><h2>Recent</h2><button class="link" data-go="timeline">Timeline</button></div><div class="card rows">' +
+    (recent.length ? recent.map(txRow).join("") : '<div class="empty"><div class="big">✨</div>Tap + to add your first transaction, or import a Revolut statement from More.</div>') + '</div>';
+}
+
+function renderTimeline(){
+  const sel = $("#tl-wallet"), keep = sel.value;
+  sel.innerHTML = '<option value="">All wallets</option>' + db.wallets.map(w => '<option value="' + w.id + '">' + esc(w.name) + '</option>').join("");
+  sel.value = keep;
+  const q = $("#tl-search").value.trim().toLowerCase();
+  const list = db.transactions.filter(t => (!sel.value || t.walletId === sel.value) &&
+    (!q || (t.note + " " + category(db, t.category).name + " " + (t.labels || []).join(" ")).toLowerCase().includes(q)))
+    .sort((a, b) => b.date.localeCompare(a.date)).slice(0, 600);
+  if (!list.length){ $("#tl").innerHTML = '<div class="empty"><div class="big">🗂️</div>Nothing here yet.</div>'; return; }
+  let html = "", day = null, buf = [];
+  const flush = () => { if (!buf.length) return; const sum = buf.filter(counts).reduce((s, t) => s + txBase(db, t), 0);
+    html += '<div class="day"><span>' + esc(dayName(day)) + (day > today() ? " · scheduled" : "") + '</span><span class="tnum">' + fmt(sum, db.base, true) + '</span></div><div class="card rows" style="padding-block:4px">' + buf.map(txRow).join("") + '</div>'; buf = []; };
+  for (const t of list){ if (t.date !== day){ flush(); day = t.date; } buf.push(t); }
+  flush();
+  $("#tl").innerHTML = '<div style="display:flex;flex-direction:column;gap:14px">' + html + '</div>';
+}
+
+function budgetCard(b){
+  const spent = budgetSpent(db, b, curYm), pct = b.amount ? spent / b.amount * 100 : 0;
+  const cls = pct >= 100 ? "crit" : pct >= 80 ? "warn" : "";
+  return '<button class="card" data-budget="' + b.id + '" style="text-align:left;width:100%"><div style="display:flex;gap:8px;align-items:baseline"><b>' + esc(b.name) +
+    '</b><span class="spacer"></span><span class="tnum">' + fmt(spent, b.currency) + ' / ' + fmt(b.amount, b.currency) + '</span></div><div class="bar-track"><div class="bar-fill ' + cls + '" style="width:' + Math.min(100, pct).toFixed(1) +
+    '%"></div></div><div class="mini" style="margin-top:6px">' + (spent <= b.amount ? fmt(b.amount - spent, b.currency) + " left" : fmt(spent - b.amount, b.currency) + " over") + " · " +
+    (b.categories.length ? b.categories.map(id => category(db, id).name).join(", ") : "All expenses") + '</div></button>';
+}
+function renderBudgets(){
+  $("#bd").innerHTML = '<div class="mini">' + esc(monthName(curYm)) + ' · monthly budgets</div>' +
+    (db.budgets.length ? db.budgets.map(budgetCard).join("") : '<div class="empty"><div class="big">🎯</div>No budgets yet. Set a monthly limit for one or more categories.<button class="btn primary" id="bd-first" style="flex:none;padding:12px 18px">Create a budget</button></div>');
+  const f = $("#bd-first"); if (f) f.onclick = () => budgetSheet();
+}
+function renderWallets(){
+  $("#wl").innerHTML = '<div class="card"><div class="eyebrow">Total</div><div class="net">' + fmt(totalBalance(db)) + '</div></div><div class="card rows">' +
+    db.wallets.map(w => '<button class="li" data-wallet="' + w.id + '"><span class="ic">' + (w.type === "bank" ? "🏦" : "👛") + '</span><span class="mid"><span class="ttl" style="display:block">' + esc(w.name) +
+      (w.hidden ? ' <span class="pill">hidden</span>' : "") + '</span><span class="meta" style="display:block">' + w.currency + '</span></span><span class="amt">' + fmt(walletBalance(db, w.id), w.currency) + '</span></button>').join("") + '</div>' +
+    '<button class="btn ghost" id="wl-transfer">⇄ Transfer between wallets</button>';
+  $("#wl-transfer").onclick = () => txSheet({ kind: "transfer" });
+}
+
+function render(){
+  ({ overview: renderOverview, timeline: renderTimeline, budgets: renderBudgets, wallets: renderWallets, more: () => {} })[screen]();
+}
+function go(s){
+  screen = s; $$(".screen").forEach(x => x.classList.toggle("active", x.dataset.screen === s));
+  $$("nav.tabs button").forEach(b => b.classList.toggle("on", b.dataset.go === s));
+  $("#fab").hidden = s === "more"; render(); window.scrollTo(0, 0);
+}
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-go]"); if (g){ go(g.dataset.go); return; }
+  const t = e.target.closest("[data-tx]"); if (t){ const tx = db.transactions.find(x => x.id === t.dataset.tx); if (tx) txSheet({ tx }); return; }
+  const b = e.target.closest("[data-budget]"); if (b){ budgetSheet(db.budgets.find(x => x.id === b.dataset.budget)); return; }
+  const w = e.target.closest("[data-wallet]"); if (w){ walletSheet(wallet(db, w.dataset.wallet)); return; }
+  const m = e.target.closest("[data-mon]"); if (m){ curYm = shiftYm(curYm, +m.dataset.mon); render(); }
+});
+$("#tl-search").addEventListener("input", renderTimeline);
+$("#tl-wallet").addEventListener("change", renderTimeline);
+$("#fab").onclick = () => txSheet({});
+$("#add-budget").onclick = () => budgetSheet();
+$("#add-wallet").onclick = () => walletSheet();
+
+// ---- transaction sheet ----
+function walletOptions(sel){ return db.wallets.map(w => '<option value="' + w.id + '"' + (w.id === sel ? " selected" : "") + '>' + esc(w.name) + ' (' + w.currency + ')</option>').join(""); }
+function txSheet({ tx, kind, prefill = {} }){
+  if (!db.wallets.length){ toast("Create a wallet first"); return walletSheet(); }
+  const editing = !!tx;
+  if (tx && tx.category === SYS.transfer && tx.amount > 0 && tx.linkedId) tx = db.transactions.find(x => x.id === tx.linkedId) || tx;
+  let k = kind || (tx ? txKind(tx) : prefill.cents > 0 ? "income" : "expense");
+  const linked = tx && tx.linkedId ? db.transactions.find(x => x.id === tx.linkedId) : null;
+  const tpl = tx && tx.templateId ? db.templates.find(x => x.id === tx.templateId) : null;
+  let cat = tx ? tx.category : prefill.category || null;
+  const draw = () => {
+    const cats = db.categories.filter(c => c.type === k);
+    if (!cats.find(c => c.id === cat)) cat = cats[0] && cats[0].id;
+    openSheet('<h2>' + (editing ? "Edit" : "New") + ' transaction</h2>' +
+      (editing ? "" : '<div class="seg">' + ["expense", "income", "transfer"].map(x => '<button data-k="' + x + '"' + (x === k ? ' class="on"' : "") + '>' + x[0].toUpperCase() + x.slice(1) + '</button>').join("") + '</div>') +
+      '<label class="fld">Amount<input id="f-amt" class="amount-in" inputmode="decimal" placeholder="0.00" value="' + (tx ? (Math.abs(tx.amount) / 100).toFixed(2) : prefill.cents ? (Math.abs(prefill.cents) / 100).toFixed(2) : "") + '"></label>' +
+      '<label class="fld">' + (k === "transfer" ? "From wallet" : "Wallet") + '<select id="f-wal">' + walletOptions(tx ? tx.walletId : prefill.walletId || (db.wallets[0] && db.wallets[0].id)) + '</select></label>' +
+      (k === "transfer" ? '<label class="fld">To wallet<select id="f-to">' + walletOptions(linked ? linked.walletId : (db.wallets[1] || db.wallets[0]).id) + '</select></label>' +
+        '<label class="fld">Amount received (if different currency)<input id="f-amt2" inputmode="decimal" placeholder="auto from rates" value="' + (linked ? (linked.amount / 100).toFixed(2) : "") + '"></label>'
+        : '<div class="catgrid" role="radiogroup" aria-label="Category">' + cats.map(c => '<button role="radio" aria-checked="' + (c.id === cat) + '" data-cat="' + c.id + '"' + (c.id === cat ? ' class="on"' : "") + '><span class="g">' + c.icon + '</span><span>' + esc(c.name) + '</span></button>').join("") + '</div>') +
+      '<label class="fld">Date<input id="f-date" type="date" value="' + (tx ? tx.date : today()) + '"></label>' +
+      '<label class="fld">Note<input id="f-note" maxlength="80" value="' + esc(tx ? tx.note : prefill.note || "") + '"></label>' +
+      (k === "transfer" ? "" : '<label class="fld">Labels (comma separated)<input id="f-lab" value="' + esc(tx ? (tx.labels || []).join(", ") : "") + '"></label>') +
+      (editing ? (tpl ? '<p class="mini">Part of a recurring series (' + tpl.repeat + '). Manage it in More → Scheduled.</p>' : "")
+        : '<label class="fld">Repeat<select id="f-rep"><option value="">Never</option><option value="weekly">Weekly</option><option value="biweekly">Every 2 weeks</option><option value="monthly">Monthly</option><option value="quarterly">Quarterly</option><option value="yearly">Yearly</option></select></label>') +
+      '<div class="btns">' + (editing ? '<button class="btn danger" id="f-del">Delete</button>' : '<button class="btn ghost" id="f-cancel">Cancel</button>') + '<button class="btn primary" id="f-save">Save</button></div>');
+    $$("[data-k]").forEach(b => b.onclick = () => { k = b.dataset.k; draw(); });
+    $$("[data-cat]").forEach(b => b.onclick = () => { cat = b.dataset.cat; $$("[data-cat]").forEach(x => { x.classList.toggle("on", x === b); x.setAttribute("aria-checked", x === b); }); });
+    if ($("#f-cancel")) $("#f-cancel").onclick = closeSheet;
+    if ($("#f-del")) $("#f-del").onclick = () => ask("Delete this transaction" + (tx.linkedId ? " and the other side of the transfer" : "") + "?", "Delete", () => { deleteTx(db, tx.id); save(); render(); });
+    $("#f-save").onclick = () => {
+      const cents = toCents($("#f-amt").value), date = $("#f-date").value, note = $("#f-note").value.trim(), wid = $("#f-wal").value;
+      if (!cents || cents < 0){ toast("Enter an amount"); $("#f-amt").focus(); return; }
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(date)){ toast("Pick a date"); return; }
+      const rep = $("#f-rep") ? $("#f-rep").value : "";
+      if (k === "transfer"){
+        const to = $("#f-to").value; if (to === wid){ toast("Pick two different wallets"); return; }
+        const c2 = $("#f-amt2").value.trim() ? toCents($("#f-amt2").value) : null;
+        if (editing) deleteTx(db, tx.id);
+        if (rep) db.templates.push({ id: uid(), walletId: wid, transferTo: to, amount: cents, note, repeat: rep, next: date });
+        else addTransfer(db, wid, to, cents, date, note, c2);
+      } else {
+        const amount = k === "expense" ? -cents : cents, labels = $("#f-lab").value.split(",").map(s => s.trim()).filter(Boolean);
+        if (editing) Object.assign(tx, { amount, walletId: wid, category: cat, date, note, labels });
+        else if (rep) db.templates.push({ id: uid(), walletId: wid, amount, category: cat, note, labels, repeat: rep, next: date });
+        else addTx(db, { walletId: wid, amount, category: cat, date, note, labels, source: prefill.source || "manual" });
+        if (prefill.card) db.cardMap[prefill.card] = wid;
+      }
+      materializeRecurring(db); save(); closeSheet(); render(); toast(rep ? "Recurring transaction scheduled" : "Saved");
+    };
+  };
+  draw();
+}
+
+// ---- budgets ----
+function budgetSheet(b){
+  const editing = !!b, sel = new Set(b ? b.categories : []);
+  openSheet('<h2>' + (editing ? "Edit" : "New") + ' budget</h2>' +
+    '<label class="fld">Name<input id="b-name" maxlength="40" value="' + esc(b ? b.name : "") + '" placeholder="e.g. Food"></label>' +
+    '<label class="fld">Monthly limit (' + db.base + ')<input id="b-amt" inputmode="decimal" value="' + (b ? (b.amount / 100).toFixed(2) : "") + '"></label>' +
+    '<div class="mini" style="margin-bottom:8px">Categories (none selected = all expenses)</div><div class="catgrid">' +
+    db.categories.filter(c => c.type === "expense").map(c => '<button data-bc="' + c.id + '" aria-pressed="' + sel.has(c.id) + '"' + (sel.has(c.id) ? ' class="on"' : "") + '><span class="g">' + c.icon + '</span><span>' + esc(c.name) + '</span></button>').join("") + '</div>' +
+    '<div class="btns">' + (editing ? '<button class="btn danger" id="b-del">Delete</button>' : '<button class="btn ghost" id="b-cancel">Cancel</button>') + '<button class="btn primary" id="b-save">Save</button></div>');
+  $$("[data-bc]").forEach(x => x.onclick = () => { const id = x.dataset.bc; sel.has(id) ? sel.delete(id) : sel.add(id); x.classList.toggle("on"); x.setAttribute("aria-pressed", sel.has(id)); });
+  if ($("#b-cancel")) $("#b-cancel").onclick = closeSheet;
+  if ($("#b-del")) $("#b-del").onclick = () => { db.budgets = db.budgets.filter(x => x !== b); save(); closeSheet(); render(); };
+  $("#b-save").onclick = () => {
+    const amount = toCents($("#b-amt").value), name = $("#b-name").value.trim() || "Budget";
+    if (!amount || amount < 0){ toast("Enter a limit"); return; }
+    const data = { name, amount, currency: db.base, categories: [...sel], walletIds: [] };
+    if (editing) Object.assign(b, data); else db.budgets.push({ id: uid(), ...data });
+    save(); closeSheet(); render();
+  };
+}
+
+// ---- wallets ----
+function walletSheet(w){
+  const editing = !!w;
+  openSheet('<h2>' + (editing ? esc(w.name) : "New wallet") + '</h2>' +
+    (editing ? '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Balance today</div><div class="net">' + fmt(walletBalance(db, w.id), w.currency) + '</div></div>' : "") +
+    '<label class="fld">Name<input id="w-name" maxlength="40" value="' + esc(w ? w.name : "") + '"></label>' +
+    '<label class="fld">Currency (3-letter code)<input id="w-cur" maxlength="3" value="' + (w ? w.currency : db.base) + '" style="text-transform:uppercase"></label>' +
+    (editing ? '<label class="fld">Set balance to (creates an adjustment that is not counted as spending)<input id="w-adj" inputmode="decimal" placeholder="' + (walletBalance(db, w.id) / 100).toFixed(2) + '"></label>' +
+      '<label class="fld" style="flex-direction:row;align-items:center"><input id="w-hide" type="checkbox" style="width:auto"' + (w.hidden ? " checked" : "") + '> Hide from total balance</label>'
+      : '<label class="fld">Starting balance<input id="w-start" inputmode="decimal" placeholder="0.00"></label>') +
+    '<div class="btns">' + (editing ? '<button class="btn danger" id="w-del">Delete</button>' : '<button class="btn ghost" id="w-cancel">Cancel</button>') + '<button class="btn primary" id="w-save">Save</button></div>');
+  if ($("#w-cancel")) $("#w-cancel").onclick = closeSheet;
+  if ($("#w-del")) $("#w-del").onclick = () => {
+    const n = db.transactions.filter(t => t.walletId === w.id).length;
+    ask("Delete " + w.name + (n ? " and its " + n + " transactions" : "") + "?", "Delete wallet", () => delWallet(w));
+  };
+  function delWallet(w){
+    const ids = new Set(db.transactions.filter(t => t.walletId === w.id).map(t => t.id));
+    db.transactions.filter(t => ids.has(t.id) && t.linkedId).forEach(t => deleteTx(db, t.id));
+    db.transactions = db.transactions.filter(t => t.walletId !== w.id);
+    db.templates = db.templates.filter(t => t.walletId !== w.id && t.transferTo !== w.id);
+    db.wallets = db.wallets.filter(x => x !== w); save(); render();
+  }
+  $("#w-save").onclick = () => {
+    const name = $("#w-name").value.trim(), cur = $("#w-cur").value.trim().toUpperCase();
+    if (!name){ toast("Name the wallet"); return; }
+    if (!/^[A-Z]{3}$/.test(cur)){ toast("Currency must be a 3-letter code like EUR"); return; }
+    if (editing){
+      Object.assign(w, { name, currency: cur, hidden: $("#w-hide").checked });
+      if ($("#w-adj").value.trim()){ const c = toCents($("#w-adj").value); if (c != null) adjustBalance(db, w.id, c); }
+    } else db.wallets.push({ id: uid(), name, currency: cur, startingBalance: toCents($("#w-start").value) || 0, type: "cash" });
+    save(); closeSheet(); render();
+  };
+}
+
+// ---- More menu ----
+$("#m-revolut").onclick = () => openSheet('<h2>Import bank CSV</h2><p style="margin-top:0">Revolut statements are detected automatically and split into one wallet per account and currency. Pending and reverted payments are skipped, card fees are deducted, and top-ups and currency exchanges are treated as transfers.</p>' +
+  '<ol class="steps"><li>Revolut app → tap the account (e.g. EUR) → <b>…</b> → <b>Statement</b>.</li><li>Choose <b>Excel/CSV</b>, pick the period, generate, and save it to Files.</li><li>Tap <b>Choose file</b> below and select it. Re-importing the same period is safe: duplicates are skipped.</li></ol>' +
+  '<div class="btns" style="margin-top:16px"><button class="btn ghost" id="i-cancel">Cancel</button><button class="btn primary" id="i-pick">Choose file</button></div>');
+document.addEventListener("click", e => { if (e.target.id === "i-pick") $("#file-csv").click(); if (e.target.id === "i-cancel") closeSheet(); });
+$("#file-csv").addEventListener("change", e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => {
+    e.target.value = "";
+    const res = parseAnyCSV(rd.result);
+    if (res.error || !res.rows.length){ toast(res.error || "No completed transactions found in that file"); return; }
+    const exp = res.rows.filter(r => r.cents < 0).length;
+    openSheet('<h2>' + (res.kind === "revolut" ? "Revolut statement" : "Bank CSV") + '</h2><p>' + res.rows.length + ' transactions found (' + exp + ' out, ' + (res.rows.length - exp) + ' in), ' +
+      res.rows[res.rows.length - 1].date + ' → ' + res.rows[0].date + '.</p>' +
+      (res.kind === "revolut" ? '<p class="mini">Wallets will be created per currency, e.g. "Revolut ' + esc(res.rows[0].product) + ' ' + esc(res.rows[0].currency) + '". Set each wallet\'s balance afterwards from Wallets so it matches the app.</p>'
+        : '<label class="fld">Import into<select id="i-wal">' + walletOptions(db.wallets[0] && db.wallets[0].id) + '</select></label>') +
+      '<div class="btns"><button class="btn ghost" id="i-cancel">Cancel</button><button class="btn primary" id="i-go">Import</button></div>');
+    $("#i-go").onclick = () => { const r = importRows(db, res, $("#i-wal") ? $("#i-wal").value : null); save(); closeSheet(); go("timeline");
+      toast("Imported " + r.added + (r.dup ? ", skipped " + r.dup + " duplicates" : "")); };
+  };
+  rd.onerror = () => toast("Couldn't read that file");
+  rd.readAsText(f);
+});
+
+$("#m-shortcut").onclick = () => {
+  const start = '<ol class="steps"><li>Open <b>Shortcuts</b> → <b>Automation</b> → <b>+</b> → <b>Transaction</b>.</li><li>Select your Revolut card (or any card), choose <b>Run Immediately</b>, turn off <b>Notify When Run</b>, then <b>New Blank Automation</b>.</li>';
+  if (nativeApp){ // the app adds a background Shortcuts action and accepts plain tally://add?… links
+    openSheet('<h2>Apple Pay auto-capture</h2><p style="margin-top:0">Every time you pay with a card in Apple Wallet, Shortcuts saves the payment to Tally in the background. Tally files it the next time you open it, using your past payments at that merchant or known shops like Lidl or Bolt. Merchants it doesn\'t know go under Other for you to review. Nothing leaves your iPhone.</p>' +
+      start + '<li>Add the action <b>Log payment in Tally</b> (search for "Tally").</li><li>Set <b>Amount</b> to <i>Amount</i>, <b>Merchant</b> to <i>Merchant</i>, and <b>Card</b> to <i>Card or Pass</i>.</li><li>Pay once to test, then open Tally.</li></ol>' +
+      '<p class="mini">Prefer to see each payment as it happens? Instead of that action, add three <b>URL Encode</b> actions (Amount, Merchant, Card or Pass) and <b>Open URLs</b> with <span class="code">tally://add?amount=<i>[Amount]</i>&amp;merchant=<i>[Merchant]</i>&amp;card=<i>[Card]</i></span> using the encoded results. Tally then opens and asks only for merchants it doesn\'t know.</p>' +
+      '<div class="btns"><button class="btn primary" id="i-cancel">Done</button></div>');
+    return;
+  }
+  const prefix = (window.claude ? "[your Tally link]" : location.href.split("#")[0]) + "#add-";
+  openSheet('<h2>Apple Pay auto-capture</h2><p style="margin-top:0">iPhone Shortcuts can run every time you pay with a card in Apple Wallet and send the amount and merchant to Tally. If Tally recognises the merchant (from your past payments there, or from known shops like Lidl or Bolt) it logs the payment straight away; otherwise it asks you for a category once and remembers it next time. Nothing is shared with any server.</p>' +
+    start +
+    '<li>Add a <b>Text</b> action containing the three variables separated by a bar: <span class="code"><i>Amount</i>|<i>Merchant</i>|<i>Card or Pass</i></span></li>' +
+    '<li>Add <b>Base64 Encode</b> and set its line breaks to <b>None</b>.</li>' +
+    '<li>Add three <b>Replace Text</b> actions on the result: <span class="code">+</span> with <span class="code">-</span>, <span class="code">/</span> with <span class="code">_</span>, and <span class="code">=</span> with nothing.</li>' +
+    '<li>Add <b>Open URLs</b> with <span class="code">' + esc(prefix) + '</span> followed by the <i>Updated Text</i> variable.</li>' +
+    '<li>Pay once to test. The wallet the payment lands in is remembered for that card.</li></ol>' +
+    '<p class="mini">Variable names can differ slightly between iOS versions. A self-hosted copy also accepts <span class="code">#add?amount=…&amp;merchant=…&amp;card=…</span>.</p><div class="btns"><button class="btn primary" id="i-cancel">Done</button></div>');
+};
+
+$("#m-recurring").onclick = function rec(){
+  openSheet('<h2>Scheduled &amp; recurring</h2>' + (db.templates.length ? '<div class="rows">' + db.templates.map(t => { const w = wallet(db, t.walletId), c = t.transferTo ? category(db, SYS.transfer) : category(db, t.category);
+    return '<div class="li"><span class="ic">' + c.icon + '</span><span class="mid"><span class="ttl" style="display:block">' + esc(t.note || c.name) + '</span><span class="meta" style="display:block">' + t.repeat + ' · next ' + t.next + (t.endDate ? " · ends " + t.endDate : "") + ' · ' + esc(w ? w.name : "?") +
+      '</span></span><span class="amt">' + fmt(t.amount, w ? w.currency : db.base, true) + '</span><button class="iconbtn" data-stop="' + t.id + '" aria-label="Stop series">✕</button></div>'; }).join("") + '</div>'
+    : '<div class="empty"><div class="big">🔁</div>No recurring transactions. Choose "Repeat" when adding one.</div>') + '<div class="btns" style="margin-top:12px"><button class="btn primary" id="i-cancel">Done</button></div>');
+  $$("[data-stop]").forEach(b => b.onclick = () => { const t = db.templates.find(x => x.id === b.dataset.stop);
+    if (t) ask("Stop this recurring series? Past transactions stay.", "Stop series", () => { db.templates = db.templates.filter(x => x !== t); save(); render(); rec(); }); });
+};
+
+$("#m-rates").onclick = () => {
+  const curs = [...new Set(db.wallets.map(w => w.currency))].filter(c => c !== db.base);
+  openSheet('<h2>Currencies</h2><label class="fld">Main currency<input id="r-base" maxlength="3" value="' + db.base + '" style="text-transform:uppercase"></label>' +
+    (curs.length ? '<p class="mini">How much is 1 unit worth in ' + db.base + '? Used for totals and budgets.</p>' + curs.map(c => '<label class="fld">1 ' + c + ' = ? ' + db.base + '<input data-rate="' + c + '" inputmode="decimal" value="' + (db.rates[c] || "") + '" placeholder="1"></label>').join("")
+      : '<p class="mini">All wallets use ' + db.base + '.</p>') + '<div class="btns"><button class="btn ghost" id="i-cancel">Cancel</button><button class="btn primary" id="r-save">Save</button></div>');
+  $("#r-save").onclick = () => {
+    const b = $("#r-base").value.trim().toUpperCase(); if (!/^[A-Z]{3}$/.test(b)){ toast("Use a 3-letter code"); return; }
+    $$("[data-rate]").forEach(i => { const v = parseAmount(i.value); if (v > 0) db.rates[i.dataset.rate] = v; else delete db.rates[i.dataset.rate]; });
+    if (b !== db.base){ db.base = b; db.rates = {}; toast("Main currency changed — re-enter rates"); }
+    save(); closeSheet(); render();
+  };
+};
+
+$("#m-export").onclick = async () => {
+  const data = JSON.stringify(db, null, 1), filename = "tally-backup-" + today() + ".json";
+  if (nativeApp){ nativeApp.postMessage({ type: "backup", data, filename }); return; } // opens the iOS share sheet
+  if (window.claude && window.claude.use){ // inside Claude, files go through the viewer's save prompt
+    const dl = await window.claude.use("downloads");
+    if (!dl){ toast("Saving files isn't available here. Open Tally in claude.ai to back up."); return; }
+    try { await dl.save({ filename, data }); toast("Backup saved"); }
+    catch (e) { if (e && e.code !== "declined") toast("Couldn't save the backup. Try again in a moment."); }
+    return;
+  }
+  const a = document.createElement("a"); a.href = URL.createObjectURL(new Blob([data], { type: "application/json" })); a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove(); setTimeout(() => URL.revokeObjectURL(a.href), 2000);
+};
+$("#m-import").onclick = () => $("#file-json").click();
+$("#file-json").addEventListener("change", e => {
+  const f = e.target.files[0]; if (!f) return;
+  const rd = new FileReader();
+  rd.onload = () => { e.target.value = "";
+    let o; try { o = JSON.parse(rd.result); } catch (err) { toast("That isn't a Tally backup"); return; }
+    if (!validateBackup(o)){ toast("That isn't a valid Tally backup"); return; }
+    ask("Replace all your data with this backup (" + o.transactions.length + " transactions)?", "Restore", () => { db = o; save(); go("overview"); toast("Backup restored"); }); };
+  rd.readAsText(f);
+});
+$("#m-theme").onclick = () => {
+  const cur = document.documentElement.getAttribute("data-theme"), dark = cur ? cur === "dark" : matchMedia("(prefers-color-scheme:dark)").matches;
+  const next = dark ? "light" : "dark"; document.documentElement.setAttribute("data-theme", next);
+  try { localStorage.setItem("tally.theme", next); } catch (e) {}
+};
+try { const t = localStorage.getItem("tally.theme"); if (t) document.documentElement.setAttribute("data-theme", t); } catch (e) {}
+$("#m-reset").onclick = () => ask("Erase all wallets and transactions" + (cloud ? " on every device" : " in this browser") + "? Back up first if unsure.", "Erase everything", () => {
+  try { localStorage.removeItem(KEY); } catch (e) {}
+  db = load(); save(); go("overview"); });
+
+// ---- Apple Pay Shortcut capture ----
+function handleHash(){
+  const cap = parseCaptureHash(location.hash); if (!cap) return;
+  history.replaceState(null, "", location.pathname + location.search);
+  const wid = captureWallet(db, cap);
+  const g = guessCategory(db, cap.merchant, cap.cents);
+  if (g.sure && wid){ // confident: log it without asking; the toast opens it for correction
+    const tx = addTx(db, { walletId: wid, amount: cap.cents, category: g.category, date: today(), note: cap.merchant, source: "applepay" });
+    if (cap.card && !db.cardMap[cap.card]) db.cardMap[cap.card] = wid;
+    save(); go("timeline");
+    toast("Logged " + fmt(cap.cents, wallet(db, wid).currency) + " " + (cap.merchant || "") + " → " + category(db, g.category).name + ". Tap to change.", () => txSheet({ tx }));
+    return;
+  }
+  txSheet({ prefill: { cents: cap.cents, walletId: wid, note: cap.merchant, category: g.category, card: cap.card, source: "applepay" } });
+}
+window.addEventListener("hashchange", handleHash);
+// The iPhone app calls this with payments its Shortcuts action saved in the background.
+window.tallyQueue = items => {
+  const r = importQueued(db, Array.isArray(items) ? items : []);
+  if (r.added){ save(); render();
+    toast("Logged " + r.added + " Apple Pay payment" + (r.added > 1 ? "s" : "") + (r.unsure ? ". " + r.unsure + " filed under Other, tap to review." : "."), r.unsure ? () => go("timeline") : null); }
+  if (r.ack.length && nativeApp) nativeApp.postMessage({ type: "ack", ids: r.ack }); // after save(), so the data file is written first
+};
+
+// ---- boot ----
+if (materializeRecurring(db)) save();
+go("overview");
+handleHash();
+startCloud();
+</script>
+</body>
+</html>
