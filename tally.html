@@ -2,12 +2,12 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Acorn">
 <title>Acorn</title>
-<meta name="tally-version" content="202611041706">
+<meta name="tally-version" content="202611041739">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="Acorn: a local-first budget tracker with wallets, transfers, budgets, Revolut import and Apple Pay capture, styled after the Gruvbox Glass desktop.">
 <style>
@@ -52,7 +52,9 @@ h1,h2,h3{margin:0;text-wrap:balance}
 button{font-family:inherit;font-size:inherit;color:inherit;cursor:pointer}
 button:focus-visible,input:focus-visible,select:focus-visible{outline:2px solid var(--gold);outline-offset:2px}
 .tnum,.amt,.v,.net,.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
-#app{min-height:100%;padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+/* The app has no host padding, so the page itself starts below the status bar; otherwise the sticky header slides over the first card. */
+#app{min-height:100%;padding-top:env(safe-area-inset-top,0px);padding-bottom:calc(76px + env(safe-area-inset-bottom,0px))}
+html{touch-action:manipulation} /* no double-tap zoom */
 .screen{display:none;flex-direction:column}
 .screen.active{display:flex}
 header.bar{position:sticky;top:env(safe-area-inset-top,0px);z-index:30;background:color-mix(in srgb,var(--ground) 78%,transparent);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);
@@ -188,7 +190,7 @@ a{color:var(--gold)}
     <main id="bd"></main>
   </section>
   <section class="screen" data-screen="wallets">
-    <header class="bar"><h1>Wallets</h1><span class="spacer"></span><button class="iconbtn" id="add-wallet">+ Wallet</button></header>
+    <header class="bar"><h1>Money</h1><span class="spacer"></span><button class="iconbtn" id="add-goal">+ Goal</button><button class="iconbtn" id="add-wallet">+ Wallet</button></header>
     <main id="wl"></main>
   </section>
   <section class="screen" data-screen="more">
@@ -223,7 +225,7 @@ a{color:var(--gold)}
   <button data-go="overview" class="on"><span class="g">◔</span>OVERVIEW</button>
   <button data-go="timeline"><span class="g">≡</span>TIMELINE</button>
   <button data-go="budgets"><span class="g">◎</span>BUDGETS</button>
-  <button data-go="wallets"><span class="g">▤</span>WALLETS</button>
+  <button data-go="wallets"><span class="g">▤</span>MONEY</button>
   <button data-go="more"><span class="g">⋯</span>MORE</button>
 </nav>
 <div class="scrim" id="scrim"><div class="sheet" id="sheet" role="dialog" aria-modal="true"></div></div>
@@ -251,12 +253,16 @@ function upgradeDb(db){
   const byId = Object.fromEntries(DEFAULT_CATS.map(c => [c.id, c]));
   for (const c of db.categories) if (!c.color) c.color = (byId[c.id] && byId[c.id].color) || "gray";
   for (const c of DEFAULT_CATS) if (c.type === "system" && !db.categories.some(x => x.id === c.id)) db.categories.push({ ...c });
+  // Wallet kind: "savings" never counts as spendable. Revolut's savings show up as "Deposit"/"Savings" products.
+  for (const w of db.wallets) if (!w.kind) w.kind = /deposit|savings|vault|pocket/i.test(w.name) ? "savings" : w.type === "cash" ? "cash" : "account";
+  db.goals = db.goals || [];
+  db.potLinks = db.potLinks || {};
   return db;
 }
 
 function emptyDb(){
   return { v: 1, base: "EUR", rates: {}, wallets: [], categories: DEFAULT_CATS.map(c => ({ ...c })),
-    transactions: [], templates: [], budgets: [], cardMap: {} };
+    transactions: [], templates: [], budgets: [], cardMap: {}, goals: [], potLinks: {} };
 }
 function uid(){ return Date.now().toString(36) + Math.random().toString(36).slice(2, 8); }
 function p2(x){ return String(x).padStart(2, "0"); }
@@ -319,7 +325,10 @@ function walletBalance(db, wid, asOf = today()){
   const w = wallet(db, wid); if (!w) return 0;
   return db.transactions.reduce((s, t) => t.walletId === wid && t.date <= asOf ? s + t.amount : s, w.startingBalance || 0);
 }
-function totalBalance(db, asOf){ return db.wallets.filter(w => !w.hidden).reduce((s, w) => s + convert(db, walletBalance(db, w.id, asOf), w.currency, db.base), 0); }
+function totalBalance(db, asOf, filter = () => true){ return db.wallets.filter(w => !w.hidden && filter(w)).reduce((s, w) => s + convert(db, walletBalance(db, w.id, asOf), w.currency, db.base), 0); }
+const isSavings = w => w.kind === "savings";
+function spendableBalance(db, asOf){ return totalBalance(db, asOf, w => !isSavings(w)); }
+function savingsBalance(db, asOf){ return totalBalance(db, asOf, isSavings); }
 function monthTxs(db, ym){ return db.transactions.filter(t => ymOf(t.date) === ym && t.date <= today() && counts(t)); }
 function monthFlow(db, ym){
   let income = 0, expense = 0;
@@ -510,7 +519,7 @@ function parseAnyCSV(text){ return parseRevolut(text) || parseGenericCSV(text); 
 
 // Revolut rows go to one wallet per product+currency ("Revolut Current EUR"); generic rows to the chosen wallet.
 function importRows(db, parsed, targetWalletId){
-  const seen = new Set(db.transactions.map(t => t.importKey).filter(Boolean));
+  const seen = new Set(db.transactions.flatMap(t => [t.importKey, t.statementKey]).filter(Boolean));
   const created = new Map(); // new Revolut wallet id -> latest row (by date) carrying Revolut's running balance
   let added = 0, dup = 0;
   for (const r of parsed.rows){
@@ -526,10 +535,15 @@ function importRows(db, parsed, targetWalletId){
     }
     const category = r.category === "other" || r.category === "otherin" ? guessCategory(db, r.desc, r.cents).category : r.category;
     const fx = inWalletCurrency(db, r.cents, r.currency, wallet(db, wid));
+    // Bank sync or the savings mirror may already have this row: link the statement to it instead of adding a copy.
+    const twin = db.transactions.find(t => t.walletId === wid && (t.source === "bank" || t.source === "mirror") && !t.statementKey &&
+      t.amount === fx.amount && dayGap(t.date, r.date) <= 1);
+    if (twin){ twin.statementKey = r.key; seen.add(r.key); dup++; continue; }
     addTx(db, { walletId: wid, amount: fx.amount, original: fx.original, unconverted: fx.unconverted, category, date: r.date, note: r.desc,
       countInOverview: r.countInOverview, importKey: r.key, source: parsed.kind });
     seen.add(r.key); added++;
   }
+  for (const w of db.wallets) if (!w.kind) w.kind = /deposit|savings|vault|pocket/i.test(w.name) ? "savings" : "account";
   // Open each new wallet at the balance Revolut reports, so totals match the bank even for a partial statement.
   for (const [wid, r] of created) if (r) wallet(db, wid).startingBalance = r.balance - walletBalance(db, wid, r.date);
   return { added, dup };
@@ -606,7 +620,7 @@ function bankWallet(db, acc){
   const taken = new Set(Object.values(db.bankLinks)), bank = String(acc.bank || "Bank");
   const fits = db.wallets.filter(w => w.currency === acc.currency && !taken.has(w.id) && w.name.toLowerCase().includes(bank.toLowerCase()));
   let w = fits.find(x => /current/i.test(x.name)) || fits[0];
-  if (!w){ w = { id: uid(), name: bank + " " + acc.currency, currency: acc.currency || db.base, startingBalance: 0, type: "bank" }; db.wallets.push(w); }
+  if (!w){ w = { id: uid(), name: bank + " " + acc.currency, currency: acc.currency || db.base, startingBalance: 0, type: "bank", kind: "account" }; db.wallets.push(w); }
   db.bankLinks[acc.uid] = w.id;
   return w.id;
 }
@@ -638,6 +652,134 @@ function importBank(db, data, now = today()){
     if (bal != null) w.startingBalance = (w.startingBalance || 0) + bal - walletBalance(db, wid, now); // wallet shows the bank's balance to the cent
   }
   return { added, matched };
+}
+
+// ---- savings mirror: Revolut savings aren't in open banking, but every move shows on the current account ----
+const SAVINGS_WORDS = /savings|deposit|vault|pocket/i;
+// "Personal -> Savings Account" (money in) / "Savings Account -> Personal" (money out) / "To 'Holiday vault'".
+function savingsPot(note){
+  const s = String(note || "");
+  if (s.includes("->")) return s.split("->").map(p => p.trim()).find(p => SAVINGS_WORDS.test(p)) || null;
+  const q = /(?:^|\s)(?:to|from)\s+'([^']+)'/i.exec(s);
+  return q && SAVINGS_WORDS.test(q[1]) && !/interest/i.test(s) ? q[1].trim() : null;
+}
+// The savings wallet a pot feeds: remembered once chosen, else the savings wallet (same currency) whose own rows mention the pot,
+// e.g. "Net Interest Paid to 'Savings Account'" in Revolut Deposit RON; else any savings wallet in that currency; else a new one.
+function potWallet(db, pot, cur){
+  db.potLinks = db.potLinks || {};
+  const key = pot.toLowerCase() + "|" + cur;
+  if (wallet(db, db.potLinks[key])) return db.potLinks[key];
+  const pots = db.wallets.filter(w => isSavings(w) && w.currency === cur);
+  const mentions = w => db.transactions.filter(t => t.walletId === w.id && String(t.note || "").toLowerCase().includes(pot.toLowerCase())).length;
+  let w = pots.map(x => [x, mentions(x)]).sort((a, b) => b[1] - a[1]).find(([, n]) => n > 0)?.[0]
+    || pots.find(x => x.name.toLowerCase().includes(pot.toLowerCase())) || pots.find(x => /deposit|savings/i.test(x.name));
+  if (!w){ w = { id: uid(), name: pot + " " + cur, currency: cur, startingBalance: 0, type: "bank", kind: "savings" }; db.wallets.push(w); }
+  db.potLinks[key] = w.id;
+  return w.id;
+}
+// Pairs each savings move on a current account with its other side in the savings wallet, as a transfer.
+// Uses a row the savings statement already imported when there is one; otherwise adds the mirror. Safe to run repeatedly.
+function mirrorSavings(db){
+  let n = 0;
+  for (const t of db.transactions.slice()){
+    const w = wallet(db, t.walletId);
+    if (!w || isSavings(w) || t.linkedId || t.mirrorOf) continue;
+    const pot = savingsPot(t.note); if (!pot) continue;
+    const sw = wallet(db, potWallet(db, pot, w.currency)), amount = convert(db, -t.amount, w.currency, sw.currency);
+    t.category = SYS.transfer; t.countInOverview = false;
+    const twin = db.transactions.find(x => x.walletId === sw.id && !x.linkedId && x.amount === amount && dayGap(x.date, t.date) <= 1);
+    const other = twin || addTx(db, { walletId: sw.id, amount, category: SYS.transfer, date: t.date, note: t.note, countInOverview: false, source: "mirror" });
+    other.category = SYS.transfer; other.countInOverview = false; other.mirrorOf = t.id;
+    t.linkedId = other.id; other.linkedId = t.id;
+    n++;
+  }
+  return n;
+}
+
+// ---- goals: each follows a savings pot ----
+function monthsBetween(fromYm, toYm){ const [a, b] = fromYm.split("-").map(Number), [c, d] = toYm.split("-").map(Number); return (c - a) * 12 + (d - b); }
+function goalStatus(db, g, now = today()){
+  const pot = wallet(db, g.potId), cur = g.currency || (pot && pot.currency) || db.base;
+  const saved = pot ? Math.max(0, convert(db, walletBalance(db, pot.id, now), pot.currency, cur)) : 0;
+  const left = Math.max(0, g.target - saved), frac = g.target ? Math.min(1, saved / g.target) : 0;
+  // Recent pace: what went into the pot over the last 3 full months, per month.
+  const from = shiftYm(ymOf(now), -3) + "-01", to = shiftYm(ymOf(now), -1) + "-31";
+  const pace = pot ? Math.round(db.transactions.filter(t => t.walletId === pot.id && t.date >= from && t.date <= to)
+    .reduce((s, t) => s + convert(db, t.amount, pot.currency, cur), 0) / 3) : 0;
+  const months = g.date ? Math.max(1, monthsBetween(ymOf(now), g.date) + 1) : null; // this month counts
+  const monthly = months ? Math.ceil(left / months) : null;
+  const eta = !left ? 0 : pace > 0 ? Math.ceil(left / pace) : null;
+  return { saved, left, frac, cur, pace, months, monthly, eta, done: !left, onTrack: !left || (monthly != null ? pace >= monthly : null) };
+}
+// Milestones newly reached (25/50/75/100%), recorded on the goal so each one notifies once.
+function goalMilestones(db, now = today()){
+  const out = [];
+  for (const g of db.goals){
+    const st = goalStatus(db, g, now), reached = [25, 50, 75, 100].filter(p => st.frac * 100 >= p);
+    g.notified = g.notified || [];
+    const fresh = reached.filter(p => !g.notified.includes(p));
+    if (!fresh.length) continue;
+    g.notified.push(...fresh);
+    const top = Math.max(...fresh);
+    out.push({ id: "goal-" + g.id + "-" + top, title: top === 100 ? g.icon + " " + g.name + ": goal reached!" : g.icon + " " + g.name + " is " + top + "% there",
+      body: money(st.saved, st.cur) + " of " + money(g.target, st.cur) + (top < 100 && st.monthly ? ". " + money(st.monthly, st.cur) + "/month to finish on time." : ".") });
+  }
+  return out;
+}
+
+// ---- budget suggestions: typical month = middle value of the last 3 full months, rounded up ----
+function roundUpNice(c){ const u = c < 10000 ? 500 : c < 100000 ? 1000 : 5000; return Math.ceil(c / u) * u; }
+function suggestBudgets(db, now = today()){
+  const yms = [3, 2, 1].map(i => shiftYm(ymOf(now), -i));
+  const spend = yms.map(ym => Object.fromEntries(categorySpend(db, ym).map(x => [x.category, x.cents])));
+  const dismissed = new Set(db.dismissedTips || []), out = [];
+  for (const c of db.categories.filter(c => c.type === "expense" && !c.hidden)){
+    const months = spend.map(m => m[c.id] || 0);
+    if (months.filter(Boolean).length < 2) continue; // not regular spending
+    const typical = [...months].sort((a, b) => a - b)[1], amount = roundUpNice(typical);
+    const own = db.budgets.find(b => b.categories.length === 1 && b.categories[0] === c.id);
+    if (!own){ if (db.budgets.some(b => !b.categories.length || b.categories.includes(c.id))) continue; // already covered
+      out.push({ key: "new|" + c.id, kind: "new", category: c.id, amount, typical, months }); continue; }
+    const over = months.every(v => v > own.amount), under = months.every(v => v < own.amount * 0.8);
+    if (over && amount > own.amount) out.push({ key: "raise|" + own.id + "|" + amount, kind: "raise", category: c.id, budgetId: own.id, amount, typical, months });
+    else if (under && amount < own.amount) out.push({ key: "lower|" + own.id + "|" + amount, kind: "lower", category: c.id, budgetId: own.id, amount, typical, months });
+  }
+  return out.filter(s => !dismissed.has(s.key)).sort((a, b) => b.typical - a.typical);
+}
+function applySuggestion(db, s){
+  const c = category(db, s.category);
+  if (s.kind === "new") db.budgets.push({ id: uid(), name: c.name, amount: s.amount, currency: db.base, categories: [c.id], walletIds: [] });
+  else { const b = db.budgets.find(x => x.id === s.budgetId); if (b) b.amount = s.amount; }
+}
+
+// ---- fun facts: money in things you can picture ----
+// Prices are rough EUR figures; a fact using them only appears when an exchange rate to EUR is known.
+const THINGS = [["flat whites", 350], ["cinema tickets", 1000], ["months of Spotify", 1100], ["Big Macs", 550], ["pizzas", 1200],
+  ["years of Netflix", 15600], ["pairs of AirPods Pro", 27900], ["new iPhones", 99900], ["weekend city breaks", 45000], ["PlayStation 5s", 49900]];
+function funFacts(db, now = today()){
+  const out = [], f = monthFlow(db, ymOf(now)), spent = f.expense, saved = savingsBalance(db, now), spendable = spendableBalance(db, now);
+  const nf = (n, d = 0) => { try { return new Intl.NumberFormat(undefined, { maximumFractionDigits: d }).format(n); } catch (e) { return String(Math.round(n)); } };
+  const eur = c => db.base === "EUR" ? c : hasRate(db, "EUR") ? convert(db, c, db.base, "EUR") : null;
+  const pick = (cents, minCount) => THINGS.map(([name, price]) => [name, cents / price]).filter(([, n]) => n >= minCount && n < 5000);
+  if (spent > 0 && eur(spent) != null) for (const [name, n] of pick(eur(spent), 2)) out.push("This month's spending is about " + nf(n) + " " + name + ".");
+  if (saved > 0 && eur(saved) != null){
+    for (const [name, n] of pick(eur(saved), 1)) out.push("Your savings could buy " + nf(n, n < 10 ? 1 : 0) + " " + name + ".");
+    const m = eur(saved) / 100 * 2.33 / 1000; // €1 coins are 2.33 mm thick
+    if (m >= 1) out.push("Stacked in €1 coins, your savings would stand " + nf(m, 1) + " m tall" + (m > 9 ? ", about a " + Math.round(m / 3) + "-storey building." : "."));
+  }
+  if (spendable > 0 && eur(spendable) != null){ const metres = eur(spendable) / 500 * 0.12; // €5 notes are 12 cm long
+    if (metres >= 1) out.push("Laid end to end in €5 notes, your spendable money would stretch " + nf(metres, 1) + " m."); }
+  // Your own habits: how many of your usual orders this month's spending is.
+  const since = shiftYm(ymOf(now), -3) + "-01", usual = {};
+  for (const t of db.transactions) if (t.date >= since && t.date <= now && counts(t) && t.amount < 0 && t.note){
+    const k = merchantKey(t.note); if (!k) continue; (usual[k] = usual[k] || { note: t.note, sum: 0, n: 0 }); usual[k].sum -= txBase(db, t); usual[k].n++; }
+  for (const u of Object.values(usual).filter(u => u.n >= 3).sort((a, b) => b.n - a.n).slice(0, 3)){
+    const avg = u.sum / u.n; if (spent >= avg * 2) out.push("This month's spending equals " + nf(spent / avg) + "× your usual " + u.note + " (" + money(Math.round(avg), db.base) + ").");
+  }
+  for (const g of db.goals){ const st = goalStatus(db, g, now);
+    if (!st.done && st.left > 0 && eur(convert(db, st.left, st.cur, db.base)) != null){
+      const coffees = eur(convert(db, st.left, st.cur, db.base)) / 350; if (coffees >= 2) out.push(g.icon + " " + g.name + " is " + nf(coffees) + " flat whites away."); } }
+  return out;
 }
 
 // Moves everything from one category to another (transactions, recurring, budgets), then removes it.
@@ -709,6 +851,9 @@ function digest(db, now = today()){
       spentText: money(b.spent, b.currency), amountText: money(b.amount, b.currency) })),
     recent: recent.map(t => { const c = category(db, t.category), w = wallet(db, t.walletId);
       return { title: t.note || c.name, icon: c.icon, color: c.color || "gray", amountText: money(t.amount, w ? w.currency : db.base) }; }),
+    spendableText: money(spendableBalance(db, now), db.base), savingsText: money(savingsBalance(db, now), db.base),
+    goals: (db.goals || []).map(g => { const st = goalStatus(db, g, now);
+      return { name: g.name, icon: g.icon || "🌰", frac: Math.round(st.frac * 1000) / 1000, savedText: money(st.saved, st.cur), targetText: money(g.target, st.cur) }; }),
   };
 }
 function weekStart(now){ const [y, m, d] = now.split("-").map(Number), dt = new Date(y, m - 1, d); dt.setDate(d - ((dt.getDay() + 6) % 7)); return today(dt); }
@@ -760,15 +905,19 @@ let db = upgradeDb(load()), curYm = ymOf(today()), screen = "overview";
 
 function load(){
   try { const raw = localStorage.getItem(KEY); if (raw){ const o = JSON.parse(raw); if (validateBackup(o)) return o; } } catch (e) {}
-  const d = emptyDb(); d.wallets.push({ id: uid(), name: "Cash", currency: "EUR", startingBalance: 0, type: "cash" }); return d;
+  const d = emptyDb(); d.wallets.push({ id: uid(), name: "Cash", currency: "EUR", startingBalance: 0, type: "cash", kind: "cash" }); return d;
 }
 // Inside the iPhone app (spendee/ios) the native side keeps the data in a file and shares backups.
 const nativeApp = window.webkit && window.webkit.messageHandlers && window.webkit.messageHandlers.tally;
 function save(){
   if (cloudState === "loading") editedEarly = true;
   let ok = true;
+  mirrorSavings(db); // keep savings pots in step with every change (idempotent)
+  const reached = goalMilestones(db); // marks them on the goals, so they're saved below
   const json = JSON.stringify(db);
   try { localStorage.setItem(KEY, json); } catch (e) { ok = false; }
+  for (const m of reached){ if (nativeApp) try { nativeApp.postMessage({ type: "notify", id: m.id, title: m.title, body: m.body }); } catch (e) {} }
+  if (reached.length) setTimeout(() => toast(reached[reached.length - 1].title), 400);
   if (nativeApp){ try { nativeApp.postMessage({ type: "save", data: json }); ok = true; } catch (e) {} }
   if (cloud) schedulePush();
   else if (!ok) toast("Couldn't save in this browser. Back up from More now.");
@@ -892,7 +1041,7 @@ function openSheet(html){
   $("#sheet-x").onclick = closeSheet;
   $("#sheet").style.transform = ""; $("#scrim").classList.add("open");
 }
-function closeSheet(){ $("#scrim").classList.remove("open"); }
+function closeSheet(){ $("#scrim").classList.remove("open"); if (nativeApp) try { nativeApp.postMessage({ type: "sheetClosed" }); } catch (e) {} } // a waiting update can load now
 // Swipe a sheet down to close it, like iOS sheets; only from the top, so scrolling a long sheet still works.
 (function sheetSwipe(){
   const sh = $("#sheet"); let y0 = null, dy = 0;
@@ -949,6 +1098,30 @@ function paceSvg(p){
     '<text x="' + L + '" y="' + (H - 4) + '">1</text><text x="' + R + '" y="' + (H - 4) + '" text-anchor="end">' + p.days + '</text></svg>';
 }
 
+// A random fact each time the screen draws; tapping shows another.
+function funFactCard(){
+  const fs = funFacts(db); if (!fs.length) return "";
+  return '<button class="card" id="fact" style="text-align:left;width:100%;color:inherit"><div class="eyebrow">Fun fact · tap for another</div>' +
+    '<div id="fact-text" style="margin-top:6px;font-family:var(--serif);font-style:italic;font-size:17px;line-height:1.35">' + esc(fs[Math.floor(Math.random() * fs.length)]) + '</div></button>';
+}
+const ymLabel = ym => ym ? new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1).toLocaleDateString(undefined, { month: "short", year: "numeric" }) : "";
+function ringSvg(frac, colorVar){
+  const r = 18, c = 2 * Math.PI * r, pct = Math.round(frac * 100);
+  return '<svg width="48" height="48" viewBox="0 0 48 48" aria-hidden="true" style="flex:none"><circle cx="24" cy="24" r="' + r + '" style="fill:none;stroke:var(--glass-hi);stroke-width:5"/>' +
+    '<circle cx="24" cy="24" r="' + r + '" transform="rotate(-90 24 24)" style="fill:none;stroke:var(' + colorVar + ');stroke-width:5;stroke-linecap:round" stroke-dasharray="' + (c * Math.min(1, frac)).toFixed(1) + ' ' + c.toFixed(1) + '"/>' +
+    '<text x="24" y="28" text-anchor="middle" style="font-family:var(--mono);font-size:11px;font-weight:700;fill:var(--fg)">' + pct + '%</text></svg>';
+}
+function goalCard(g){
+  const st = goalStatus(db, g), pot = wallet(db, g.potId);
+  const plan = st.done ? "Reached. Well done!" : st.monthly != null
+    ? fmt(st.monthly, st.cur) + "/month to make " + ymLabel(g.date) + (st.onTrack ? " · on track" : " · behind at your recent pace")
+    : st.eta != null ? "About " + st.eta + " month" + (st.eta === 1 ? "" : "s") + " at your recent pace" : "Nothing added in the last 3 months";
+  const color = st.done ? "--green" : st.onTrack === false ? "--orange" : "--gold";
+  return '<button class="card" data-goal="' + g.id + '" style="text-align:left;width:100%;display:flex;gap:14px;align-items:center;color:inherit">' + ringSvg(st.frac, color) +
+    '<span style="min-width:0;flex:1"><b>' + esc((g.icon || "🎯") + " " + g.name) + '</b><span class="mini mono" style="display:block;margin-top:2px">' + fmt(st.saved, st.cur) + ' of ' + fmt(g.target, st.cur) +
+    (pot ? ' · ' + esc(pot.name) : "") + '</span><span class="mini" style="display:block;margin-top:2px">' + esc(plan) + '</span></span></button>';
+}
+
 function renderOverview(){
   $("#ov-month").textContent = monthName(curYm);
   const f = monthFlow(db, curYm), deltas = categoryDelta(db, curYm).filter(d => d.cents > 0).sort((a, b) => b.cents - a.cents);
@@ -959,8 +1132,12 @@ function renderOverview(){
     ? fmt(ideal - spentNow) + " under " + (pace.targetIsBudget ? "your budget pace" : "last month's pace")
     : fmt(spentNow - ideal) + " ahead of " + (pace.targetIsBudget ? "your budget pace" : "last month's pace");
   $("#ov").innerHTML =
-    '<div class="card hero"><div class="eyebrow">Spent in ' + esc(monthName(curYm)) + '</div><div class="net">' + fmt(f.expense) + '</div>' +
-    '<div class="mini mono" style="margin-top:6px">in <b style="color:var(--green)">' + fmt(f.income) + '</b> · net <b>' + fmt(f.net, db.base, true) + '</b> · balance <b>' + fmt(totalBalance(db)) + '</b></div></div>' +
+    '<div class="card hero"><div class="eyebrow">Spendable now</div><div class="net">' + fmt(spendableBalance(db)) + '</div>' +
+    '<div class="mini mono" style="margin-top:6px">+ <b>' + fmt(savingsBalance(db)) + '</b> in savings · <b>' + fmt(totalBalance(db)) + '</b> total</div></div>' +
+    '<div class="grid2"><div class="card stat"><div class="k">Spent · ' + esc(monthName(curYm)) + '</div><div class="v">' + fmt(f.expense) + '</div></div>' +
+    '<div class="card stat"><div class="k">In · net</div><div class="v" style="color:var(--green)">' + fmt(f.income) + '</div><div class="mini mono">' + fmt(f.net, db.base, true) + '</div></div></div>' +
+    funFactCard() +
+    (db.goals.length ? '<div class="sectitle"><h2>Goals</h2><button class="link" data-go="wallets">MONEY →</button></div>' + db.goals.slice(0, 2).map(goalCard).join("") : "") +
     (now && (pace.target || spentNow) ? '<div class="card"><div class="eyebrow">Pace</div>' + paceSvg(pace) +
       '<div class="legend"><span><i style="background:var(--gold)"></i>' + (pace.targetIsBudget ? "Budgeted spending" : "You") + '</span>' + (pace.target ? '<span><i style="background:var(--dim)"></i>' + (pace.targetIsBudget ? "Budget pace" : "Last month") + '</span>' : "") + '</div>' +
       (paceNote ? '<div class="mini" style="margin-top:6px">' + esc(paceNote) + '</div>' : "") + '</div>' : "") +
@@ -1023,16 +1200,68 @@ function budgetCard(b){
     esc(b.categories.length ? b.categories.map(id => category(db, id).name).join(", ") : "All expenses") + '</div></button>';
 }
 function renderBudgets(){
-  $("#bd").innerHTML = '<div class="eyebrow">' + esc(monthName(curYm)) + ' · monthly</div>' +
-    (db.budgets.length ? db.budgets.map(budgetCard).join("") : '<div class="empty"><div class="big">🎯</div>No budgets yet. Set a monthly limit for one or more categories.<button class="btn primary" id="bd-first" style="flex:none;padding:12px 18px">Create a budget</button></div>');
+  const sg = suggestBudgets(db), last3 = [3, 2, 1].map(i => shiftYm(ymOf(today()), -i));
+  const short = ym => new Date(+ym.slice(0, 4), +ym.slice(5, 7) - 1, 1).toLocaleDateString(undefined, { month: "short" });
+  const tips = sg.slice(0, 5).map((s, i) => { const c = category(db, s.category);
+    const why = s.kind === "new" ? "You usually spend " + fmt(s.typical) + " a month here." : s.kind === "raise"
+      ? "Over budget 3 months running; you usually spend " + fmt(s.typical) + "." : "Well under budget 3 months running; you usually spend " + fmt(s.typical) + ".";
+    const act = s.kind === "new" ? "Set " + fmt(s.amount) + " budget" : (s.kind === "raise" ? "Raise" : "Lower") + " to " + fmt(s.amount);
+    return '<div class="card" style="--c:var(--' + (c.color || "gray") + ')"><b>' + c.icon + ' ' + esc(c.name) + '</b>' +
+      '<div class="mini mono" style="margin-top:2px">' + last3.map((ym, j) => short(ym) + " " + compact(s.months[j])).join(" · ") + '</div><div class="mini" style="margin-top:4px">' + esc(why) + '</div>' +
+      '<div class="btns" style="margin-top:10px"><button class="btn ghost" data-sg-skip="' + i + '">Not now</button><button class="btn primary" data-sg="' + i + '">' + esc(act) + '</button></div></div>'; }).join("");
+  $("#bd").innerHTML = (tips ? '<div class="sectitle" style="margin-top:0"><h2>Suggestions</h2><span class="mini mono" style="margin-left:auto">from your last 3 months</span></div>' + tips : "") +
+    '<div class="sectitle"' + (tips ? "" : ' style="margin-top:0"') + '><h2>' + esc(monthName(curYm)) + '</h2></div>' +
+    (db.budgets.length ? db.budgets.map(budgetCard).join("") : '<div class="empty"><div class="big">🎯</div>No budgets yet. Set a monthly limit for one or more categories' + (tips ? ", or take a suggestion above." : ".") + '<button class="btn primary" id="bd-first" style="flex:none;padding:12px 18px">Create a budget</button></div>');
   const f = $("#bd-first"); if (f) f.onclick = () => budgetSheet();
+  $$("[data-sg]").forEach(b => b.onclick = () => { const s = sg[+b.dataset.sg]; applySuggestion(db, s); save(); render(); haptic("success");
+    toast((s.kind === "new" ? "Budget set: " : "Budget updated: ") + category(db, s.category).name + " " + fmt(s.amount)); });
+  $$("[data-sg-skip]").forEach(b => b.onclick = () => { db.dismissedTips = [...(db.dismissedTips || []), sg[+b.dataset.sgSkip].key]; save(); render(); });
+}
+const KIND = { account: ["🏦", "blue"], cash: ["👛", "green"], savings: ["🌰", "yellow"] };
+function walletRow(w){
+  const [icon, color] = KIND[w.kind] || KIND.account;
+  return '<button class="li" data-wallet="' + w.id + '" style="--c:var(--' + color + ')"><span class="ic">' + icon + '</span><span class="mid"><span class="ttl">' + esc(w.name) +
+    (w.hidden ? ' <span class="pill">hidden</span>' : "") + '</span><span class="meta">' + w.currency + (w.kind === "cash" ? " · cash" : "") + '</span></span><span class="amt">' + fmt(walletBalance(db, w.id), w.currency) + '</span></button>';
 }
 function renderWallets(){
-  $("#wl").innerHTML = '<div class="card hero"><div class="eyebrow">Total balance</div><div class="net">' + fmt(totalBalance(db)) + '</div></div><div class="card rows">' +
-    db.wallets.map(w => '<button class="li" data-wallet="' + w.id + '" style="--c:var(--' + (w.type === "bank" ? "blue" : "green") + ')"><span class="ic">' + (w.type === "bank" ? "🏦" : "👛") + '</span><span class="mid"><span class="ttl">' + esc(w.name) +
-      (w.hidden ? ' <span class="pill">hidden</span>' : "") + '</span><span class="meta">' + w.currency + '</span></span><span class="amt">' + fmt(walletBalance(db, w.id), w.currency) + '</span></button>').join("") + '</div>' +
+  const accounts = db.wallets.filter(w => !isSavings(w)), pots = db.wallets.filter(isSavings);
+  $("#wl").innerHTML = '<div class="card hero"><div class="eyebrow">Net worth</div><div class="net">' + fmt(totalBalance(db)) + '</div>' +
+    '<div class="mini mono" style="margin-top:6px">spendable <b>' + fmt(spendableBalance(db)) + '</b> · savings <b>' + fmt(savingsBalance(db)) + '</b></div></div>' + funFactCard() +
+    '<div class="sectitle"><h2>Goals</h2></div>' + (db.goals.length ? db.goals.map(goalCard).join("")
+      : '<button class="card" id="goal-first" style="text-align:left;width:100%;color:inherit"><b>🎯 Save up for something</b><span class="mini" style="display:block;margin-top:4px">Add a goal, pick the savings pot it follows, and Acorn shows how much to put aside each month.</span></button>') +
+    '<div class="sectitle"><h2>Accounts</h2></div><div class="card rows">' + accounts.map(walletRow).join("") + '</div>' +
+    '<div class="sectitle"><h2>Savings</h2></div><div class="card rows">' + (pots.length ? pots.map(walletRow).join("")
+      : '<div class="empty" style="padding:16px">No savings yet. Mark a wallet as Savings, or let bank sync find your “Personal -> Savings Account” moves.</div>') + '</div>' +
+    '<p class="mini" style="margin:0 2px">Revolut doesn\'t share savings through open banking, so Acorn mirrors the moves it sees on your current account. Import a savings statement now and then to add the interest.</p>' +
     '<button class="btn ghost" id="wl-transfer">⇄ Transfer between wallets</button>';
   $("#wl-transfer").onclick = () => txSheet({ kind: "transfer" });
+  const gf = $("#goal-first"); if (gf) gf.onclick = () => goalSheet();
+}
+
+// ---- goals ----
+function goalSheet(g){
+  if (!db.wallets.length){ toast("Add a wallet first"); return walletSheet(); }
+  const editing = !!g, pots = db.wallets.filter(isSavings), choices = pots.length ? pots : db.wallets;
+  openSheet('<h2>' + (editing ? "Edit goal" : "New goal") + '</h2>' +
+    '<div class="grid2" style="grid-template-columns:76px minmax(0,1fr)"><label class="fld">Icon<input id="g-icon" maxlength="4" value="' + esc(g ? g.icon : "🎯") + '" style="text-align:center;font-size:22px;padding:8px"></label>' +
+    '<label class="fld">What for<input id="g-name" maxlength="40" value="' + esc(g ? g.name : "") + '" placeholder="e.g. New laptop"></label></div>' +
+    '<div class="grid2"><label class="fld">Target<input id="g-target" inputmode="decimal" value="' + (g ? (g.target / 100).toFixed(2) : "") + '" placeholder="1500"></label>' +
+    '<label class="fld">By (optional)<input id="g-date" type="month" value="' + esc(g && g.date || "") + '"></label></div>' +
+    '<label class="fld">Saving in<select id="g-pot">' + choices.map(w => '<option value="' + w.id + '"' + (g && g.potId === w.id ? " selected" : "") + '>' + esc(w.name) + ' (' + w.currency + ')</option>').join("") + '</select></label>' +
+    '<p class="mini" style="margin-top:-4px">Progress follows this pot\'s balance. One Revolut vault per goal keeps goals apart.</p>' +
+    '<div class="btns">' + (editing ? '<button class="btn danger" id="g-del">Delete</button>' : '<button class="btn ghost" id="i-cancel">Cancel</button>') + '<button class="btn primary" id="g-save">Save</button></div>');
+  if ($("#g-del")) $("#g-del").onclick = () => ask("Delete the goal " + g.name + "? Your money stays where it is.", "Delete goal", () => { db.goals = db.goals.filter(x => x !== g); save(); render(); });
+  $("#g-save").onclick = () => {
+    const name = $("#g-name").value.trim(), target = toCents($("#g-target").value), potId = $("#g-pot").value, date = $("#g-date").value;
+    if (!name){ toast("Name the goal"); return; }
+    if (!target || target <= 0){ toast("Enter a target amount"); return; }
+    const data = { name, icon: $("#g-icon").value.trim() || "🎯", target, potId, currency: wallet(db, potId).currency, date: /^\d{4}-\d{2}$/.test(date) ? date : "" };
+    const goal = editing ? Object.assign(g, data) : { id: uid(), ...data };
+    // Don't announce milestones already behind you when the goal is created or its target changes.
+    const frac = goalStatus(db, goal).frac; goal.notified = [25, 50, 75, 100].filter(p => frac * 100 >= p);
+    if (!editing) db.goals.push(goal);
+    save(); closeSheet(); render(); haptic("success"); toast(editing ? "Goal updated" : "Goal added");
+  };
 }
 
 function render(){
@@ -1049,6 +1278,8 @@ document.addEventListener("click", e => {
   const t = e.target.closest("[data-tx]"); if (t){ if (suppressClick) return; const tx = db.transactions.find(x => x.id === t.dataset.tx); if (tx) txSheet({ tx }); return; }
   const b = e.target.closest("[data-budget]"); if (b){ budgetSheet(db.budgets.find(x => x.id === b.dataset.budget)); return; }
   const w = e.target.closest("[data-wallet]"); if (w){ walletSheet(wallet(db, w.dataset.wallet)); return; }
+  const gl = e.target.closest("[data-goal]"); if (gl){ goalSheet(db.goals.find(x => x.id === gl.dataset.goal)); return; }
+  const ff = e.target.closest("#fact"); if (ff){ const fs = funFacts(db); $("#fact-text").textContent = fs[Math.floor(Math.random() * fs.length)] || ""; haptic("light"); return; }
   const m = e.target.closest("[data-mon]"); if (m){ curYm = shiftYm(curYm, +m.dataset.mon); render(); }
 });
 $("#tl-search").addEventListener("input", renderTimeline);
@@ -1056,6 +1287,7 @@ $("#tl-wallet").addEventListener("change", renderTimeline);
 $("#fab").onclick = () => txSheet({});
 $("#add-budget").onclick = () => budgetSheet();
 $("#add-wallet").onclick = () => walletSheet();
+$("#add-goal").onclick = () => goalSheet();
 
 // ---- transaction sheet: keypad first, recent merchants as chips, category follows the merchant ----
 function walletOptions(sel){ return db.wallets.map(w => '<option value="' + w.id + '"' + (w.id === sel ? " selected" : "") + '>' + esc(w.name) + ' (' + w.currency + ')</option>').join(""); }
@@ -1164,7 +1396,8 @@ function walletSheet(w){
   openSheet('<h2>' + (editing ? esc(w.name) : "New wallet") + '</h2>' +
     (editing ? '<div class="card" style="margin-bottom:14px"><div class="eyebrow">Balance today</div><div class="net">' + fmt(walletBalance(db, w.id), w.currency) + '</div></div>' : "") +
     '<label class="fld">Name<input id="w-name" maxlength="40" value="' + esc(w ? w.name : "") + '"></label>' +
-    '<label class="fld">Currency (3-letter code)<input id="w-cur" maxlength="3" value="' + (w ? w.currency : db.base) + '" style="text-transform:uppercase"></label>' +
+    '<div class="grid2"><label class="fld">Currency<input id="w-cur" maxlength="3" value="' + (w ? w.currency : db.base) + '" style="text-transform:uppercase"></label>' +
+    '<label class="fld">Kind<select id="w-kind">' + [["account", "Account"], ["cash", "Cash"], ["savings", "Savings"]].map(([k, l]) => '<option value="' + k + '"' + ((w ? w.kind : "cash") === k ? " selected" : "") + '>' + l + '</option>').join("") + '</select></label></div>' +
     (editing ? '<label class="fld">Set balance to (creates an adjustment that is not counted as spending)<input id="w-adj" inputmode="decimal" placeholder="' + (walletBalance(db, w.id) / 100).toFixed(2) + '"></label>' +
       '<label class="fld" style="flex-direction:row;align-items:center"><input id="w-hide" type="checkbox" style="width:auto"' + (w.hidden ? " checked" : "") + '> Hide from total balance</label>'
       : '<label class="fld">Starting balance<input id="w-start" inputmode="decimal" placeholder="0.00"></label>') +
@@ -1186,9 +1419,9 @@ function walletSheet(w){
     if (!name){ toast("Name the wallet"); return; }
     if (!/^[A-Z]{3}$/.test(cur)){ toast("Currency must be a 3-letter code like EUR"); return; }
     if (editing){
-      Object.assign(w, { name, currency: cur, hidden: $("#w-hide").checked });
+      Object.assign(w, { name, currency: cur, kind: $("#w-kind").value, hidden: $("#w-hide").checked });
       if ($("#w-adj").value.trim()){ const c = toCents($("#w-adj").value); if (c != null) adjustBalance(db, w.id, c); }
-    } else db.wallets.push({ id: uid(), name, currency: cur, startingBalance: toCents($("#w-start").value) || 0, type: "cash" });
+    } else db.wallets.push({ id: uid(), name, currency: cur, kind: $("#w-kind").value, startingBalance: toCents($("#w-start").value) || 0, type: $("#w-kind").value === "cash" ? "cash" : "bank" });
     save(); closeSheet(); render();
   };
 }
