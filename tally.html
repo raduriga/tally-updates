@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Acorn">
 <title>Acorn</title>
-<meta name="tally-version" content="202611041552">
+<meta name="tally-version" content="202611041706">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="Acorn: a local-first budget tracker with wallets, transfers, budgets, Revolut import and Apple Pay capture, styled after the Gruvbox Glass desktop.">
 <style>
@@ -108,7 +108,10 @@ nav.tabs button.on{color:var(--gold);background:color-mix(in srgb,var(--gold) 12
   padding:16px max(16px,env(safe-area-inset-left,0px)) calc(20px + env(safe-area-inset-bottom,0px)) max(16px,env(safe-area-inset-right,0px))}
 .sheet::before{content:"";display:block;width:36px;height:4px;border-radius:99px;background:var(--glass-hi);margin:0 auto 12px}
 @media (min-width:640px){.scrim{align-items:center;justify-content:center}.sheet{max-width:520px;border-radius:20px;border-bottom:1px solid var(--line)}main{max-width:640px;margin:0 auto;width:100%}}
-.sheet h2{font-family:var(--serif);font-style:italic;font-size:22px;font-weight:600;margin-bottom:14px}
+.sheet h2{font-family:var(--serif);font-style:italic;font-size:22px;font-weight:600;margin-bottom:14px;padding-right:44px}
+.sheet{position:relative;transition:transform .2s ease}
+.sheet.dragging{transition:none}
+.sheet .x{position:absolute;top:12px;right:max(12px,env(safe-area-inset-right,0px));width:34px;height:34px;border-radius:9px;border:0;background:var(--glass-2);color:var(--dim);font-size:15px;font-weight:700;display:grid;place-items:center;z-index:1}
 .seg{display:flex;background:var(--glass-2);border-radius:10px;padding:3px;gap:3px;margin-bottom:12px}
 .seg button{flex:1;border:0;background:none;padding:8px;border-radius:8px;font-family:var(--mono);font-size:12px;font-weight:700;color:var(--dim)}
 .seg button.on{background:var(--glass-hi);color:var(--fg)}
@@ -200,6 +203,7 @@ a{color:var(--gold)}
       <div class="eyebrow" style="margin:4px 2px -4px">Capture</div>
       <div class="card menu rows">
         <button class="li" id="m-revolut" style="--c:var(--blue)"><span class="ic">📄</span><span class="mid"><span class="ttl">Import bank CSV</span><span class="meta">Revolut statement or any bank CSV</span></span></button>
+        <button class="li" id="m-bank" style="--c:var(--blue)" hidden><span class="ic">🏦</span><span class="mid"><span class="ttl">Bank sync</span><span class="meta" id="bank-meta">Every Revolut payment, automatically</span></span></button>
         <button class="li" id="m-shortcut" style="--c:var(--green)"><span class="ic">📲</span><span class="mid"><span class="ttl">Apple Pay auto-capture</span><span class="meta">Shortcut logs each card tap</span></span></button>
       </div>
       <div class="eyebrow" style="margin:4px 2px -4px">App</div>
@@ -582,6 +586,60 @@ function importQueued(db, items){
   return { added, unsure, ack };
 }
 
+// ---- bank sync: Enable Banking accounts/transactions handed over by the iPhone app ----
+// Revolut-style moves that aren't spending: currency exchanges, vault/pocket moves, top-ups.
+const INTERNAL = /^exchanged (to|from)|^to (savings|pocket|vault)|^from (savings|pocket|vault)|top-?up/i;
+function bankTxFields(t){
+  const debit = t.credit_debit_indicator === "DBIT", amt = t.transaction_amount || {}, cents = toCents(amt.amount);
+  if (cents == null) return null;
+  const party = debit ? t.creditor && t.creditor.name : t.debtor && t.debtor.name;
+  const text = [].concat(t.remittance_information || []).join(" ").trim();
+  return { cents: (debit ? -1 : 1) * Math.abs(cents), currency: String(amt.currency || "").toUpperCase(),
+    date: String(t.booking_date || t.value_date || t.transaction_date || "").slice(0, 10),
+    note: String(party || text || "Bank transaction").trim().slice(0, 80), text,
+    ref: t.entry_reference || t.transaction_id || "", booked: !t.status || t.status === "BOOK" };
+}
+// Each bank account gets one wallet: an existing one for that bank and currency (e.g. "Revolut Current EUR"), else a new one.
+function bankWallet(db, acc){
+  db.bankLinks = db.bankLinks || {};
+  if (wallet(db, db.bankLinks[acc.uid])) return db.bankLinks[acc.uid];
+  const taken = new Set(Object.values(db.bankLinks)), bank = String(acc.bank || "Bank");
+  const fits = db.wallets.filter(w => w.currency === acc.currency && !taken.has(w.id) && w.name.toLowerCase().includes(bank.toLowerCase()));
+  let w = fits.find(x => /current/i.test(x.name)) || fits[0];
+  if (!w){ w = { id: uid(), name: bank + " " + acc.currency, currency: acc.currency || db.base, startingBalance: 0, type: "bank" }; db.wallets.push(w); }
+  db.bankLinks[acc.uid] = w.id;
+  return w.id;
+}
+const dayGap = (a, b) => Math.abs(Date.parse(a) - Date.parse(b)) / 864e5;
+function importBank(db, data, now = today()){
+  let added = 0, matched = 0;
+  const seen = new Set(db.transactions.flatMap(t => [t.importKey, t.bankRef]).filter(Boolean));
+  for (const acc of (data && data.accounts) || []){
+    const wid = bankWallet(db, acc), w = wallet(db, wid);
+    for (const raw of acc.transactions || []){
+      const f = bankTxFields(raw);
+      if (!f || !f.booked || !f.cents || !/^\d{4}-\d{2}-\d{2}$/.test(f.date)) continue; // pending payments wait until booked
+      const key = "eb|" + acc.uid + "|" + (f.ref || f.date + "|" + f.cents + "|" + f.note);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const fx = inWalletCurrency(db, f.cents, f.currency, w);
+      // Already here from an Apple Pay tap or a statement import? Link it (taking the bank's exact amount) instead of adding a copy.
+      const twin = db.transactions.find(t => t.walletId === wid && !t.bankRef && Math.sign(t.amount) === Math.sign(fx.amount) &&
+        (t.source === "applepay" ? dayGap(t.date, f.date) <= 3 && Math.abs(t.amount - fx.amount) <= Math.max(5, Math.abs(fx.amount) * 0.03)
+          : t.amount === fx.amount && dayGap(t.date, f.date) <= 1));
+      if (twin){ twin.bankRef = key; if (twin.source === "applepay"){ twin.amount = fx.amount; twin.unconverted = false; } matched++; continue; }
+      const internal = INTERNAL.test(f.note) || INTERNAL.test(f.text);
+      addTx(db, { walletId: wid, amount: fx.amount, original: fx.original, unconverted: fx.unconverted, date: f.date, note: f.note,
+        category: internal ? SYS.transfer : guessCategory(db, f.note + " " + f.text, fx.amount).category,
+        countInOverview: !internal, importKey: key, source: "bank" });
+      added++;
+    }
+    const bal = acc.balance == null ? null : toCents(acc.balance);
+    if (bal != null) w.startingBalance = (w.startingBalance || 0) + bal - walletBalance(db, wid, now); // wallet shows the bank's balance to the cent
+  }
+  return { added, matched };
+}
+
 // Moves everything from one category to another (transactions, recurring, budgets), then removes it.
 function mergeCategory(db, from, to){
   for (const t of db.transactions) if (t.category === from) t.category = to;
@@ -829,8 +887,21 @@ function toast(msg, onTap, action){ // action {label, fn} adds a button, e.g. Un
   t.onclick = onTap ? () => { t.hidden = true; onTap(); } : null;
   clearTimeout(t._h); t._h = setTimeout(() => t.hidden = true, onTap || action ? 6000 : 2800); }
 function haptic(style){ if (nativeApp) try { nativeApp.postMessage({ type: "haptic", style }); } catch (e) {} }
-function openSheet(html){ $("#sheet").innerHTML = html; $("#scrim").classList.add("open"); }
+function openSheet(html){
+  $("#sheet").innerHTML = '<button class="x" id="sheet-x" aria-label="Close">✕</button>' + html;
+  $("#sheet-x").onclick = closeSheet;
+  $("#sheet").style.transform = ""; $("#scrim").classList.add("open");
+}
 function closeSheet(){ $("#scrim").classList.remove("open"); }
+// Swipe a sheet down to close it, like iOS sheets; only from the top, so scrolling a long sheet still works.
+(function sheetSwipe(){
+  const sh = $("#sheet"); let y0 = null, dy = 0;
+  sh.addEventListener("touchstart", e => { y0 = sh.scrollTop <= 0 && !e.target.closest("input,select,textarea,.keypad") ? e.touches[0].clientY : null; dy = 0; }, { passive: true });
+  sh.addEventListener("touchmove", e => { if (y0 === null) return; dy = e.touches[0].clientY - y0;
+    if (dy > 0){ e.preventDefault(); sh.classList.add("dragging"); sh.style.transform = "translateY(" + dy + "px)"; } }, { passive: false });
+  sh.addEventListener("touchend", () => { if (y0 === null) return; sh.classList.remove("dragging"); y0 = null;
+    if (dy > 110){ sh.style.transform = "translateY(100%)"; setTimeout(closeSheet, 180); } else sh.style.transform = ""; });
+})();
 $("#scrim").addEventListener("click", e => { if (e.target.id === "scrim") closeSheet(); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") closeSheet(); });
 
@@ -1170,6 +1241,71 @@ $("#m-shortcut").onclick = () => {
     '<li>Pay once to test. The wallet the payment lands in is remembered for that card.</li></ol>' +
     '<p class="mini">Variable names can differ slightly between iOS versions. A self-hosted copy also accepts <span class="code">#add?amount=…&amp;merchant=…&amp;card=…</span>.</p><div class="btns"><button class="btn primary" id="i-cancel">Done</button></div>');
 };
+
+// ---- bank sync screen (iPhone app only; the app holds the key and talks to Enable Banking) ----
+const BANK_RETURN = "https://raduriga.github.io/tally-updates/bank.html";
+const COUNTRIES = ["RO", "AT", "BE", "BG", "CZ", "DE", "DK", "EE", "ES", "FI", "FR", "GB", "GR", "HR", "HU", "IE", "IT", "LT", "LU", "LV", "NL", "NO", "PL", "PT", "SE", "SI", "SK"];
+let bankStatus = {}, bankBanks = [];
+window.acornBankStatus = s => {
+  bankStatus = s || {};
+  $("#bank-meta").textContent = bankStatus.syncing ? "Syncing…" : bankStatus.error ? "Needs attention" : bankStatus.connected
+    ? "Connected to " + bankStatus.aspsp + (bankStatus.lastSync ? " · synced " + new Date(bankStatus.lastSync).toLocaleTimeString(undefined, { hour: "2-digit", minute: "2-digit" }) : "")
+    : "Every Revolut payment, automatically";
+  if ($("#bank-sheet")) bankSheet();
+};
+window.acornBankList = names => { bankBanks = names || []; if ($("#bank-sheet") && !bankStatus.connected) bankSheet(); };
+window.tallyBank = payload => { // the app's sync result
+  const r = importBank(db, payload);
+  save(); render();
+  if (r.added || r.matched) toast("Bank sync: " + r.added + " new" + (r.matched ? ", " + r.matched + " matched to payments you already had" : ""), () => go("timeline"));
+};
+if (nativeApp){ $("#m-bank").hidden = false; nativeApp.postMessage({ type: "bankStatus" }); }
+$("#m-bank").onclick = () => { bankSheet(); if (bankStatus.configured && !bankStatus.connected) nativeApp.postMessage({ type: "bankList", country: bankStatus.country || "RO" }); };
+function bankSheet(){
+  const s = bankStatus, err = s.error ? '<div class="card" style="margin-bottom:12px;border-color:color-mix(in srgb,var(--red) 40%,transparent)"><div class="eyebrow" style="color:var(--red)">Problem</div><div style="margin-top:4px">' + esc(s.error) + '</div></div>' : "";
+  let body;
+  if (!s.configured){
+    body = '<p style="margin-top:0">Acorn can read every transaction on your Revolut account (card payments, Apple Pay in apps, transfers) through <b>Enable Banking</b>, a licensed open-banking provider. Access is read-only, your key stays in this iPhone\'s Keychain, and nothing goes through any other server. One-time setup on your laptop:</p>' +
+      '<ol class="steps"><li>Sign in at <b>enablebanking.com</b> with your email, then open <b>API applications</b>.</li>' +
+      '<li>Add a new application: environment <b>Production</b>, name <b>Acorn</b>, redirect URL<br><span class="code">' + BANK_RETURN + '</span><br>then press <b>Register</b>. A key file named like <span class="code">1a2b…-….pem</span> downloads.</li>' +
+      '<li>On that application, choose <b>Link accounts</b>, pick <b>Revolut</b> in <b>Romania</b> and approve in Revolut. This switches the application on for your own accounts only.</li>' +
+      '<li>Send the <b>.pem</b> file to this iPhone (AirDrop or iCloud Drive) and choose it below.</li></ol>' +
+      '<input type="file" id="bank-file" accept=".pem,application/x-pem-file,text/plain" hidden>' +
+      '<label class="fld" style="margin-top:14px">Application ID (from the file name)<input id="bank-app" autocomplete="off" value="' + esc(s.appId || "") + '" placeholder="filled in from the key file"></label>' +
+      '<div class="btns"><button class="btn ghost" id="i-cancel">Later</button><button class="btn primary" id="bank-pick">Choose key file</button></div>';
+  } else if (!s.connected){
+    const country = s.country || "RO", banks = bankBanks.length ? bankBanks : [s.aspsp || "Revolut"];
+    body = '<p style="margin-top:0">Key saved. Now connect your bank: Safari opens, you approve <b>read-only</b> access in Revolut, and you come back here. Access lasts up to 180 days; Acorn tells you when to renew.</p>' +
+      '<div class="grid2" style="grid-template-columns:90px minmax(0,1fr)"><label class="fld">Country<select id="bank-country">' + COUNTRIES.map(c => '<option' + (c === country ? " selected" : "") + '>' + c + '</option>').join("") + '</select></label>' +
+      '<label class="fld">Bank<select id="bank-name">' + banks.map(n => '<option' + (n === (s.aspsp || "Revolut") ? " selected" : "") + '>' + esc(n) + '</option>').join("") + '</select></label></div>' +
+      '<div class="btns"><button class="btn ghost" id="i-cancel">Later</button><button class="btn primary" id="bank-connect">Connect</button></div>';
+  } else {
+    const until = s.validUntil ? new Date(s.validUntil) : null, days = until ? Math.ceil((until - Date.now()) / 864e5) : null;
+    body = '<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="color:var(--green)">Connected</div><div style="margin-top:4px">' + esc(s.aspsp) + ' · ' + s.accounts + ' account' + (s.accounts === 1 ? "" : "s") +
+      (s.syncing ? ' · syncing…' : s.lastSync ? ' · last sync ' + esc(new Date(s.lastSync).toLocaleString(undefined, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })) : "") + '</div>' +
+      (days != null ? '<div class="mini" style="margin-top:4px">Access ends in ' + days + ' day' + (days === 1 ? "" : "s") + (days <= 14 ? ". Reconnect soon to keep syncing." : ".") + '</div>' : "") + '</div>' +
+      '<p class="mini" style="margin-top:0">Acorn syncs when you open it (at most every 30 minutes). Payments already logged by Apple Pay or a statement import are matched, not duplicated.</p>' +
+      '<div class="btns"><button class="btn danger" id="bank-forget">Disconnect</button><button class="btn primary" id="bank-sync"' + (s.syncing ? " disabled" : "") + '>' + (s.syncing ? "Syncing…" : "Sync now") + '</button></div>';
+  }
+  openSheet('<div id="bank-sheet"></div><h2>Bank sync</h2>' + err + body);
+  if ($("#bank-pick")) $("#bank-pick").onclick = () => $("#bank-file").click();
+  if ($("#bank-file")) $("#bank-file").onchange = e => {
+    const f = e.target.files[0]; if (!f) return;
+    const rd = new FileReader();
+    rd.onload = () => {
+      const pem = String(rd.result);
+      if (!/-----BEGIN (RSA )?PRIVATE KEY-----/.test(pem)){ toast("That isn't the .pem key file from Enable Banking"); return; }
+      const id = ($("#bank-app").value.trim() || f.name.replace(/\.pem$/i, "")).trim();
+      nativeApp.postMessage({ type: "bankKey", pem, appId: id }); haptic("success");
+      setTimeout(() => nativeApp.postMessage({ type: "bankList", country: "RO" }), 300);
+    };
+    rd.readAsText(f);
+  };
+  if ($("#bank-country")) $("#bank-country").onchange = e => { bankBanks = []; nativeApp.postMessage({ type: "bankList", country: e.target.value }); };
+  if ($("#bank-connect")) $("#bank-connect").onclick = () => { nativeApp.postMessage({ type: "bankConnect", aspsp: $("#bank-name").value, country: $("#bank-country").value }); toast("Opening Safari…"); };
+  if ($("#bank-sync")) $("#bank-sync").onclick = () => { nativeApp.postMessage({ type: "bankSync" }); haptic("light"); };
+  if ($("#bank-forget")) $("#bank-forget").onclick = () => ask("Disconnect " + (bankStatus.aspsp || "your bank") + "? Transactions already in Acorn stay.", "Disconnect", () => nativeApp.postMessage({ type: "bankForget" }));
+}
 
 $("#m-recurring").onclick = function rec(){
   openSheet('<h2>Scheduled &amp; recurring</h2>' + (db.templates.length ? '<div class="rows">' + db.templates.map(t => { const w = wallet(db, t.walletId), c = t.transferTo ? category(db, SYS.transfer) : category(db, t.category);
