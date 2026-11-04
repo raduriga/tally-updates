@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Acorn">
 <title>Acorn</title>
-<meta name="tally-version" content="202611031940">
+<meta name="tally-version" content="202611041552">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="Acorn: a local-first budget tracker with wallets, transfers, budgets, Revolut import and Apple Pay capture, styled after the Gruvbox Glass desktop.">
 <style>
@@ -151,10 +151,12 @@ a{color:var(--gold)}
 .chip .g{margin-right:4px}
 /* swipe rows */
 .swipe{position:relative;overflow:hidden}
-.swipe .under{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;padding:0 14px;font-family:var(--mono);font-size:11px;font-weight:800;letter-spacing:.08em}
+/* The action labels sit under the row and only show while it's being dragged; the row is opaque then so they never overlap its text. */
+.swipe .under{position:absolute;inset:0;display:flex;justify-content:space-between;align-items:center;padding:0 14px;font-family:var(--mono);font-size:11px;font-weight:800;letter-spacing:.08em;visibility:hidden}
 .swipe .under .l{color:var(--blue)}.swipe .under .r{color:var(--red)}
 .swipe .li{position:relative;background:transparent;transition:transform .18s ease}
-.swipe.dragging .li{transition:none}
+.swipe.dragging .under{visibility:visible}
+.swipe.dragging .li{transition:none;background:var(--ground)}
 .swipe.dragging{background:var(--glass-2)}
 /* charts */
 .chart{width:100%;height:auto;display:block;overflow:visible}
@@ -843,7 +845,7 @@ function txRow(t, swipe){
   const c = category(db, t.category), w = wallet(db, t.walletId), k = txKind(t);
   let title = t.note || c.name;
   if (k === "transfer"){ const o = db.transactions.find(x => x.id === t.linkedId), ow = o && wallet(db, o.walletId);
-    title = (t.amount < 0 ? "To " : "From ") + (ow ? ow.name : "wallet") + (t.note ? " · " + t.note : ""); }
+    title = ow ? (t.amount < 0 ? "To " : "From ") + ow.name + (t.note ? " · " + t.note : "") : t.note || "Transfer"; } // unpaired (e.g. a Revolut exchange): just its note
   const orig = t.original ? fmt(t.original.amount, t.original.currency) + (t.unconverted ? " ⚠ no exchange rate, edit the amount" : "") : "";
   const meta = [w ? w.name : "?", t.note ? c.name : "", orig, ...(t.labels || []).map(l => "#" + l), t.templateId ? "🔁" : ""].filter(Boolean).join(" · ");
   const row = '<button class="li" data-tx="' + t.id + '" style="--c:var(--' + (c.color || "gray") + ')"><span class="ic">' + c.icon + '</span><span class="mid"><span class="ttl">' + esc(title) +
@@ -1148,7 +1150,11 @@ $("#file-csv").addEventListener("change", e => {
 $("#m-shortcut").onclick = () => {
   const start = '<ol class="steps"><li>Open <b>Shortcuts</b> → <b>Automation</b> → <b>+</b> → <b>Transaction</b>.</li><li>Select your Revolut card (or any card), choose <b>Run Immediately</b>, turn off <b>Notify When Run</b>, then <b>New Blank Automation</b>.</li>';
   if (nativeApp){ // the app adds a background Shortcuts action and accepts plain tally://add?… links
-    openSheet('<h2>Apple Pay auto-capture</h2><p style="margin-top:0">Every time you pay with a card in Apple Wallet, Shortcuts saves the payment to Acorn in the background. Acorn files it the next time you open it, using your past payments at that merchant or known shops like Lidl or Bolt. Merchants it doesn\'t know go under Other for you to review. Nothing leaves your iPhone.</p>' +
+    const caps = db.transactions.filter(t => t.source === "applepay").sort((a, b) => b.date.localeCompare(a.date)), last = caps[0];
+    const status = last
+      ? '<div class="card" style="--c:var(--green);margin-bottom:12px"><div class="eyebrow">Working</div><div style="margin-top:4px">' + caps.length + ' payment' + (caps.length > 1 ? "s" : "") + ' captured. Last: ' + esc(last.note || "payment") + ', ' + esc(dayName(last.date)) + '.</div></div>'
+      : '<div class="card" style="margin-bottom:12px"><div class="eyebrow" style="color:var(--orange)">Nothing captured yet</div><div style="margin-top:4px">Only payments made <b>with Apple Pay</b> trigger it: tapping your phone at a till, or choosing Apple Pay at checkout. Cards saved inside apps and websites (Wolt, Bolt, subscriptions) and Revolut transfers never do. Import your Revolut statement for those.</div></div>';
+    openSheet('<h2>Apple Pay auto-capture</h2>' + status + '<p style="margin-top:0">Every time you pay with a card in Apple Wallet, Shortcuts saves the payment to Acorn in the background and notifies you where it was filed. Merchants it doesn\'t know go under Other for you to review. Nothing leaves your iPhone.</p>' +
       start + '<li>Add the action <b>Log payment in Acorn</b> (search for "Acorn").</li><li>Set <b>Amount</b> to <i>Amount</i>, <b>Merchant</b> to <i>Merchant</i>, and <b>Card</b> to <i>Card or Pass</i>.</li><li>Pay once to test, then open Acorn.</li></ol>' +
       '<p class="mini">Prefer to see each payment as it happens? Instead of that action, add three <b>URL Encode</b> actions (Amount, Merchant, Card or Pass) and <b>Open URLs</b> with <span class="code">acorn://add?amount=<i>[Amount]</i>&amp;merchant=<i>[Merchant]</i>&amp;card=<i>[Card]</i></span> using the encoded results. Acorn then opens and asks only for merchants it doesn\'t know.</p>' +
       '<div class="btns"><button class="btn primary" id="i-cancel">Done</button></div>');
