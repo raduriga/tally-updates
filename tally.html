@@ -7,7 +7,7 @@
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <meta name="apple-mobile-web-app-title" content="Acorn">
 <title>Acorn</title>
-<meta name="tally-version" content="202611041739">
+<meta name="tally-version" content="202611051024">
 <meta name="claude:viewport-fit-sides" content="cover">
 <meta name="description" content="Acorn: a local-first budget tracker with wallets, transfers, budgets, Revolut import and Apple Pay capture, styled after the Gruvbox Glass desktop.">
 <style>
@@ -257,6 +257,7 @@ function upgradeDb(db){
   for (const w of db.wallets) if (!w.kind) w.kind = /deposit|savings|vault|pocket/i.test(w.name) ? "savings" : w.type === "cash" ? "cash" : "account";
   db.goals = db.goals || [];
   db.potLinks = db.potLinks || {};
+  rehomeSavingsCaptures(db);
   return db;
 }
 
@@ -573,9 +574,26 @@ function parseCaptureHash(hash){
 
 // Wallet for a captured card payment: the one used for this card before, a wallet named after the card (same currency
 // first: a CZK payment on a Revolut card still lands in "Revolut EUR"), then one in the payment's currency.
+// Never a savings wallet: cards don't spend from savings, and "Revolut" matches "Revolut Deposit RON" as well as "Revolut Current RON".
 function captureWallet(db, cap){
   const card = cap.card.toLowerCase(), cur = w => !cap.currency || w.currency === cap.currency, named = w => card && w.name.toLowerCase().includes(card);
-  return db.cardMap[cap.card] || (db.wallets.find(w => named(w) && cur(w)) || db.wallets.find(named) || db.wallets.find(cur) || db.wallets[0] || {}).id;
+  const spend = db.wallets.filter(w => !isSavings(w)), mapped = wallet(db, db.cardMap[cap.card]);
+  return (mapped && !isSavings(mapped) ? mapped : spend.find(w => named(w) && cur(w)) || spend.find(named) || spend.find(cur) || spend[0] || {}).id;
+}
+// Repair for card payments the old matching put in a savings wallet: back to that bank's spending wallet in the same currency,
+// merged with the bank-synced copy if sync already brought it in (the same matching importBank uses).
+function rehomeSavingsCaptures(db){
+  for (const [card, id] of Object.entries(db.cardMap || {})) if (isSavings(wallet(db, id) || {})) delete db.cardMap[card];
+  for (const t of db.transactions.filter(t => t.source === "applepay" && isSavings(wallet(db, t.walletId) || {}))){
+    const sw = wallet(db, t.walletId), bank = sw.name.split(" ")[0].toLowerCase();
+    const spend = db.wallets.filter(w => !isSavings(w) && w.currency === sw.currency);
+    const to = spend.find(w => w.name.toLowerCase().startsWith(bank)) || spend[0];
+    if (!to) continue;
+    t.walletId = to.id;
+    const copy = db.transactions.find(x => x.walletId === to.id && x.source === "bank" && !x.linkedId && Math.sign(x.amount) === Math.sign(t.amount) &&
+      dayGap(x.date, t.date) <= 3 && Math.abs(x.amount - t.amount) <= Math.max(5, Math.abs(x.amount) * 0.03));
+    if (copy){ t.bankRef = copy.importKey; t.amount = copy.amount; t.unconverted = false; deleteTx(db, copy.id); }
+  }
 }
 // Payments queued by the iPhone app's "Log payment in Acorn" action: [{id, amount, merchant, card, date}].
 // Returns ids safe to drop from the queue (stored, already stored, or unreadable); kept ones wait for a wallet.
@@ -618,7 +636,7 @@ function bankWallet(db, acc){
   db.bankLinks = db.bankLinks || {};
   if (wallet(db, db.bankLinks[acc.uid])) return db.bankLinks[acc.uid];
   const taken = new Set(Object.values(db.bankLinks)), bank = String(acc.bank || "Bank");
-  const fits = db.wallets.filter(w => w.currency === acc.currency && !taken.has(w.id) && w.name.toLowerCase().includes(bank.toLowerCase()));
+  const fits = db.wallets.filter(w => w.currency === acc.currency && !taken.has(w.id) && !isSavings(w) && w.name.toLowerCase().includes(bank.toLowerCase()));
   let w = fits.find(x => /current/i.test(x.name)) || fits[0];
   if (!w){ w = { id: uid(), name: bank + " " + acc.currency, currency: acc.currency || db.base, startingBalance: 0, type: "bank", kind: "account" }; db.wallets.push(w); }
   db.bankLinks[acc.uid] = w.id;
